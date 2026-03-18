@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yudao-pilot-mcp"
+version = "0.1.0"
+description = "面向 yudao 生态的 MCP 智能开发助手"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Yudao Pilot Contributors" }
+]
+dependencies = [
+  "fastmcp>=2.7.0",
+  "pydantic>=2.8.0",
+  "PyYAML>=6.0.2",
+]
+
+[project.scripts]
+yudao-pilot = "yudao_pilot.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yudao_pilot"]

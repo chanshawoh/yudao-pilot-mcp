@@ -1,0 +1,209 @@
+from __future__ import annotations
+
+from pathlib import Path
+from textwrap import dedent
+
+import yaml
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .models import DatabaseConfig, FrontendType, RoutingMode, WorkspaceConfigFile
+
+
+CONFIG_DIR_NAME = ".yudao-pilot"
+CONFIG_FILE_NAME = "config.yaml"
+
+
+class WorkspaceInfo(BaseModel):
+    name: str = "my-yudao-workspace"
+
+
+class BackendProject(BaseModel):
+    path: str
+    type: str
+    config_profile: str = "local"
+
+
+class FrontendProject(BaseModel):
+    type: FrontendType
+    path: str
+
+
+class ProjectsConfig(BaseModel):
+    backend: BackendProject
+    frontend: list[FrontendProject] = Field(default_factory=list)
+
+    @field_validator("frontend")
+    @classmethod
+    def validate_unique_frontend_types(
+        cls, frontend_projects: list[FrontendProject]
+    ) -> list[FrontendProject]:
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for project in frontend_projects:
+            if project.type in seen:
+                duplicates.add(project.type)
+            seen.add(project.type)
+        if duplicates:
+            duplicate_text = ", ".join(sorted(duplicates))
+            raise ValueError(f"projects.frontend 存在重复的 type: {duplicate_text}")
+        return frontend_projects
+
+
+class ManualTableRule(BaseModel):
+    table: str
+    business: str
+    entity: str
+
+
+class ManualRule(BaseModel):
+    module: str
+    table_prefixes: list[str] = Field(default_factory=list)
+    table_rules: list[ManualTableRule] = Field(default_factory=list)
+
+    @field_validator("table_prefixes")
+    @classmethod
+    def sort_prefixes_desc(cls, prefixes: list[str]) -> list[str]:
+        return sorted(prefixes, key=len, reverse=True)
+
+
+class RoutingConfig(BaseModel):
+    mode: RoutingMode = "manual"
+
+
+class CodegenConfig(BaseModel):
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    manual_rules: list[ManualRule] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_manual_mode(self) -> "CodegenConfig":
+        if self.routing.mode == "manual" and not self.manual_rules:
+            raise ValueError("routing.mode=manual 时，manual_rules 不能为空")
+        return self
+
+
+class WorkspaceConfig(BaseModel):
+    version: int = 1
+    workspace: WorkspaceInfo = Field(default_factory=WorkspaceInfo)
+    projects: ProjectsConfig
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    codegen: CodegenConfig = Field(default_factory=CodegenConfig)
+
+
+def default_config_template() -> str:
+    return dedent(
+        """\
+        version: 1
+
+        workspace:
+          name: my-yudao-workspace
+
+        projects:
+          backend:
+            path: ../yudao-server
+            type: ruoyi-vue-pro-jdk17 # 可选：ruoyi-vue-pro、ruoyi-vue-pro-jdk17、yudao-cloud
+            config_profile: local # 读取后端本地配置时使用的环境名
+
+          frontend:
+            - type: yudao-ui-admin-vue3 # 可选：yudao-ui-admin-vue3、yudao-ui-admin-vben、yudao-ui-admin-uniapp
+              path: ../yudao-ui-admin-vue3
+            - type: yudao-ui-admin-uniapp
+              path: ../yudao-ui-admin-uniapp
+            # 约束：
+            # 1. backend 只能有一个
+            # 2. frontend 中 type 不能重复，重复直接报错
+            # 3. path 必须存在，且识别结果必须和 type 匹配，否则报错
+
+        database:
+          mode: auto # auto | manual
+          host: ""
+          port: 3306
+          database: ""
+          username: ""
+          password: ""
+          # 规则：
+          # 1. mode=manual 时，直接使用这里的数据库连接
+          # 2. mode=auto 时，如果这里未填写，则优先从 backend 的本地配置中读取
+          # 3. MCP 读取成功后，可以回填到本配置文件中
+
+        codegen:
+          routing:
+            mode: manual # auto | ask | manual
+            # auto: MCP 自动分析目标位置，并告诉 AI 先生成代码，再调用 MCP 写入
+            # ask: MCP 返回候选位置，由 AI 询问用户后再继续
+            # manual: 按 manual_rules 规则解析，不让用户每次重复确认
+
+          manual_rules:
+            - module: member
+              table_prefixes:
+                - merchant_user
+                - merchant
+                - member
+              table_rules:
+                - table: member
+                  business: member
+                  entity: Member
+
+                - table: member_user
+                  business: member_user
+                  entity: MemberUser
+
+                - table: member_user_login_log
+                  business: member_user_login_log
+                  entity: MemberUserLoginLog
+
+                - table: merchant
+                  business: merchant
+                  entity: Merchant
+              # 规则：
+              # 1. 先按 table_rules.table 精确匹配
+              # 2. 若未命中，再按 table_prefixes 做最长前缀匹配
+              # 3. 最长前缀优先，例如 merchant_user 优先于 merchant
+              # 4. business 用于业务目录、菜单、路由等
+              # 5. entity 用于实体类、VO、DTO、TS 类型名等
+              # 6. 最终生成目标严格按 projects 中已配置的后端和前端类型执行
+        """
+    )
+
+
+def resolve_config_path(workspace_root: str | Path) -> Path:
+    root = Path(workspace_root).expanduser().resolve()
+    return root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
+
+
+def load_workspace_config_file(workspace_root: str | Path) -> WorkspaceConfigFile:
+    config_path = resolve_config_path(workspace_root)
+    if not config_path.exists():
+        return WorkspaceConfigFile(
+            path=str(config_path),
+            exists=False,
+            template=default_config_template(),
+        )
+    return WorkspaceConfigFile(
+        path=str(config_path),
+        exists=True,
+        content=config_path.read_text(encoding="utf-8"),
+    )
+
+
+def load_workspace_config(workspace_root: str | Path) -> WorkspaceConfig:
+    config_path = resolve_config_path(workspace_root)
+    raw_text = config_path.read_text(encoding="utf-8")
+    raw_data = yaml.safe_load(raw_text) or {}
+    return WorkspaceConfig.model_validate(raw_data)
+
+
+def init_workspace_config(
+    workspace_root: str | Path, *, overwrite: bool = False
+) -> WorkspaceConfigFile:
+    config_path = resolve_config_path(workspace_root)
+    if config_path.exists() and not overwrite:
+        return WorkspaceConfigFile(
+            path=str(config_path),
+            exists=True,
+            content=config_path.read_text(encoding="utf-8"),
+        )
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    content = default_config_template()
+    config_path.write_text(content, encoding="utf-8")
+    return WorkspaceConfigFile(path=str(config_path), exists=True, content=content)
