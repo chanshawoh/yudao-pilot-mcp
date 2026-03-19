@@ -18,6 +18,8 @@ class PomFacts:
     path: Path
     group_id: str | None = None
     artifact_id: str | None = None
+    parent_group_id: str | None = None
+    parent_artifact_id: str | None = None
     packaging: str | None = None
     properties: dict[str, str] = field(default_factory=dict)
     modules: list[str] = field(default_factory=list)
@@ -186,7 +188,25 @@ def resolve_project_path(workspace_root: Path, configured_path: str) -> Path:
     return (workspace_root / configured_path).resolve()
 
 
+def resolve_backend_repo_root(project_path: Path) -> Path:
+    if (project_path / "yudao-server").exists():
+        return project_path
+    if project_path.name == "yudao-server" and project_path.parent.exists():
+        return project_path.parent
+    return project_path
+
+
+def resolve_backend_server_root(project_path: Path) -> Path:
+    if (project_path / "src" / "main" / "resources").exists():
+        return project_path
+    if (project_path / "yudao-server" / "src" / "main" / "resources").exists():
+        return project_path / "yudao-server"
+    return project_path
+
+
 def inspect_backend_project(project_path: Path) -> ProjectDetection:
+    repo_root = resolve_backend_repo_root(project_path)
+    server_root = resolve_backend_server_root(project_path)
     root_pom_path = project_path / "pom.xml"
     if not root_pom_path.exists():
         return ProjectDetection(
@@ -197,22 +217,39 @@ def inspect_backend_project(project_path: Path) -> ProjectDetection:
         )
 
     root_facts = parse_pom(root_pom_path)
-    module_facts = collect_module_poms(project_path, root_facts.modules)
-    facts = [root_facts, *module_facts]
+    effective_root_facts = root_facts
+    if (
+        root_facts.artifact_id == "yudao-server"
+        and root_facts.parent_group_id == "cn.iocoder.boot"
+        and root_facts.parent_artifact_id == "yudao"
+    ):
+        parent_pom_path = project_path.parent / "pom.xml"
+        if parent_pom_path.exists():
+            effective_root_facts = parse_pom(parent_pom_path)
+
+    module_facts = collect_module_poms(repo_root, effective_root_facts.modules)
+    server_pom_path = server_root / "pom.xml"
+    server_facts = parse_pom(server_pom_path) if server_pom_path.exists() and server_pom_path != effective_root_facts.path else None
+    facts = [effective_root_facts, *module_facts]
+    if server_facts is not None:
+        facts.append(server_facts)
 
     all_dependencies = flatten_dependency_artifacts(facts)
     imported_boms = flatten_imported_boms(facts)
-    java_version = resolve_property_value(root_facts.properties, "java.version")
-    spring_boot_version = resolve_property_value(root_facts.properties, "spring.boot.version")
+    java_version = resolve_property_value(effective_root_facts.properties, "java.version")
+    spring_boot_version = resolve_property_value(effective_root_facts.properties, "spring.boot.version")
 
     evidence: list[str] = []
     yudao_score = 0
-    if root_facts.packaging == "pom":
+    if effective_root_facts.packaging == "pom":
         yudao_score += 1
         evidence.append("根 pom 的 packaging 为 pom")
-    if root_facts.group_id == "cn.iocoder.boot" and root_facts.artifact_id == "yudao":
+    if effective_root_facts.group_id == "cn.iocoder.boot" and effective_root_facts.artifact_id == "yudao":
         yudao_score += 2
         evidence.append("根 pom 的 groupId/artifactId 为 cn.iocoder.boot:yudao")
+    elif root_facts.artifact_id == "yudao-server" and root_facts.parent_artifact_id == "yudao":
+        yudao_score += 2
+        evidence.append("当前 pom 为 yudao-server，且父工程为 cn.iocoder.boot:yudao")
     if ("cn.iocoder.boot", "yudao-dependencies") in imported_boms:
         yudao_score += 3
         evidence.append("dependencyManagement 引入了 cn.iocoder.boot:yudao-dependencies")
@@ -235,8 +272,8 @@ def inspect_backend_project(project_path: Path) -> ProjectDetection:
         )
 
     cloud_markers = collect_cloud_markers(imported_boms, all_dependencies)
-    boot3_markers = collect_boot3_markers(root_facts, all_dependencies, spring_boot_version, java_version)
-    boot2_markers = collect_boot2_markers(root_facts, all_dependencies, spring_boot_version, java_version)
+    boot3_markers = collect_boot3_markers(effective_root_facts, all_dependencies, spring_boot_version, java_version)
+    boot2_markers = collect_boot2_markers(effective_root_facts, all_dependencies, spring_boot_version, java_version)
 
     evidence.extend(cloud_markers["evidence"])
     evidence.extend(boot3_markers["evidence"])
@@ -360,6 +397,8 @@ def parse_pom(pom_path: Path) -> PomFacts:
         path=pom_path,
         group_id=find_text(root, f"{namespace}groupId") or find_text(root, f"{namespace}parent/{namespace}groupId"),
         artifact_id=find_text(root, f"{namespace}artifactId"),
+        parent_group_id=find_text(root, f"{namespace}parent/{namespace}groupId"),
+        parent_artifact_id=find_text(root, f"{namespace}parent/{namespace}artifactId"),
         packaging=find_text(root, f"{namespace}packaging") or "jar",
         properties=read_properties(root, namespace),
         modules=[value for value in find_text_list(root, f"{namespace}modules/{namespace}module") if value],

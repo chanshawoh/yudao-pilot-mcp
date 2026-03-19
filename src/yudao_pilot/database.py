@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 
 from .config import WorkspaceConfig
-from .inspector import resolve_project_path
+from .inspector import resolve_backend_server_root, resolve_project_path
 from .models import DatabaseConfig
 
 
@@ -34,37 +34,54 @@ def resolve_database_config(
 
     merged = DatabaseConfig(
         mode=config.database.mode,
-        host=backend_db.get("host", ""),
-        port=backend_db.get("port", 3306),
-        database=backend_db.get("database", ""),
-        username=backend_db.get("username", ""),
-        password=backend_db.get("password", ""),
-        source="backend-local",
+        host=resolved.host or backend_db.get("host", ""),
+        port=resolved.port if has_database_override(resolved, "port") else backend_db.get("port", 3306),
+        database=resolved.database or backend_db.get("database", ""),
+        username=resolved.username or backend_db.get("username", ""),
+        password=resolved.password or backend_db.get("password", ""),
+        source="config" if has_any_database_override(resolved) else "backend-local",
     )
-    return {"ok": True, "database": merged.model_dump(), "message": "已从后端本地配置解析数据库连接"}
+    message = (
+        "已合并工作区配置与后端本地数据库连接"
+        if has_any_database_override(resolved)
+        else "已从后端本地配置解析数据库连接"
+    )
+    return {"ok": True, "database": merged.model_dump(), "message": message}
 
 
 def read_backend_local_database(
     backend_root: Path, config_profile: str
 ) -> dict[str, Any] | None:
-    resource_root = backend_root / "src" / "main" / "resources"
-    candidates = [
-        resource_root / f"application-{config_profile}.yaml",
-        resource_root / f"application-{config_profile}.yml",
-        resource_root / "application-local.yaml",
-        resource_root / "application-local.yml",
-        resource_root / "application.yaml",
-        resource_root / "application.yml",
-    ]
+    server_root = resolve_backend_server_root(backend_root)
+    resource_root = server_root / "src" / "main" / "resources"
+    candidates = unique_paths(
+        [
+            resource_root / "application.yaml",
+            resource_root / "application.yml",
+            resource_root / "application-local.yaml",
+            resource_root / "application-local.yml",
+            resource_root / f"application-{config_profile}.yaml",
+            resource_root / f"application-{config_profile}.yml",
+        ]
+    )
 
     for file_path in candidates:
         if not file_path.exists():
             continue
-        raw_data = yaml.safe_load(file_path.read_text(encoding="utf-8")) or {}
+        raw_data = load_yaml_documents(file_path)
         resolved = extract_database_from_spring_config(raw_data)
         if resolved:
             return resolved
     return None
+
+
+def load_yaml_documents(file_path: Path) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    raw_text = file_path.read_text(encoding="utf-8")
+    for document in yaml.safe_load_all(raw_text):
+        if isinstance(document, dict):
+            merged = deep_merge_dicts(merged, document)
+    return merged
 
 
 def extract_database_from_spring_config(raw_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -84,7 +101,12 @@ def extract_database_from_spring_config(raw_data: dict[str, Any]) -> dict[str, A
     if isinstance(dynamic, dict):
         dynamic_sources = dynamic.get("datasource")
         if isinstance(dynamic_sources, dict):
-            for candidate_name in ("master", "primary", "default"):
+            preferred_names: list[str] = []
+            primary_name = stringify_scalar(dynamic.get("primary"))
+            if primary_name:
+                preferred_names.append(primary_name)
+            preferred_names.extend(["master", "primary", "default"])
+            for candidate_name in deduplicate_values(preferred_names):
                 candidate = dynamic_sources.get(candidate_name)
                 if isinstance(candidate, dict):
                     resolved = normalize_jdbc_config(candidate)
@@ -100,9 +122,9 @@ def extract_database_from_spring_config(raw_data: dict[str, Any]) -> dict[str, A
 
 def normalize_jdbc_config(raw_config: dict[str, Any]) -> dict[str, Any] | None:
     url = raw_config.get("url")
-    username = raw_config.get("username")
-    password = raw_config.get("password")
-    if not all(isinstance(value, str) for value in [url, username, password]):
+    username = stringify_scalar(raw_config.get("username"))
+    password = stringify_scalar(raw_config.get("password"), default="")
+    if not isinstance(url, str) or username is None or password is None:
         return None
 
     host, port, database = parse_mysql_jdbc_url(url)
@@ -129,3 +151,59 @@ def parse_mysql_jdbc_url(url: str) -> tuple[str, int, str]:
     except ValueError:
         port = 3306
     return host, port, database
+
+
+def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge_dicts(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def stringify_scalar(value: Any, default: str | None = None) -> str | None:
+    if value is None:
+        return default
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    return None
+
+
+def deduplicate_values(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def has_any_database_override(config: DatabaseConfig) -> bool:
+    return bool(
+        config.host
+        or config.database
+        or config.username
+        or config.password
+        or has_database_override(config, "port")
+    )
+
+
+def has_database_override(config: DatabaseConfig, field_name: str) -> bool:
+    if field_name == "port":
+        return config.port != 3306
+    return bool(getattr(config, field_name))
+
+
+def unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        result.append(path)
+    return result

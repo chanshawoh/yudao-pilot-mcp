@@ -6,6 +6,11 @@ from typing import Any
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
+from .codegen import (
+    build_codegen_context,
+    compare_codegen_reference_projects,
+    write_mysql_migration,
+)
 from .config import (
     WorkspaceConfig,
     init_workspace_config,
@@ -15,6 +20,8 @@ from .config import (
 from .database import resolve_database_config
 from .models import GeneratedFile, TableResolution
 from .inspector import inspect_project_path, validate_workspace_projects
+from .schema import inspect_table_schema
+from .scaffold import generate_scaffold_files
 from .writer import write_generated_files
 
 
@@ -29,6 +36,10 @@ def load_validated_config(workspace_root: str | None = None) -> tuple[Path, Work
     root = get_workspace_root(workspace_root)
     config = load_workspace_config(root)
     return root, config
+
+
+def get_reference_projects_root() -> Path:
+    return Path.cwd().resolve() / "yudao-projects"
 
 
 def success_response(message: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -140,6 +151,14 @@ def inspect_project_path_tool(project_path: str) -> dict[str, Any]:
 
 
 @mcp.tool
+def compare_codegen_reference_projects_tool() -> dict[str, Any]:
+    """比较 ruoyi-vue-pro 与 ruoyi-vue-pro-jdk17 的代码生成核心实现差异。"""
+    reference_root = get_reference_projects_root()
+    result = compare_codegen_reference_projects(reference_root)
+    return success_response("参考项目代码生成差异分析完成", result)
+
+
+@mcp.tool
 def validate_workspace_projects_tool(workspace_root: str | None = None) -> dict[str, Any]:
     """校验工作区中的后端和前端项目是否与配置严格匹配。"""
     loaded = load_config_or_error(workspace_root)
@@ -198,6 +217,116 @@ def infer_codegen_plan_tool(table_name: str, workspace_root: str | None = None) 
 
 
 @mcp.tool
+def inspect_codegen_context_tool(
+    table_name: str,
+    workspace_root: str | None = None,
+    module_name: str | None = None,
+    business_name: str | None = None,
+    entity_name: str | None = None,
+    menu_name: str | None = None,
+    parent_menu_name: str | None = None,
+    parent_menu_id: int | None = None,
+) -> dict[str, Any]:
+    """结合配置规则、后端默认配置和 SQL 菜单数据，构建生成代码所需上下文。"""
+    loaded = load_config_or_error(workspace_root)
+    if isinstance(loaded, dict):
+        return loaded
+    root, config = loaded
+    resolution = infer_table_resolution(table_name, config)
+    context = build_codegen_context(
+        root,
+        config,
+        table_name,
+        module_name=module_name or resolution.module,
+        business_name=business_name or resolution.business,
+        entity_name=entity_name or resolution.entity,
+        menu_name=menu_name,
+        parent_menu_name=parent_menu_name,
+        parent_menu_id=parent_menu_id,
+    )
+    context["workspace_root"] = str(root)
+    context["resolved_from_config"] = resolution.model_dump()
+    return success_response("代码生成上下文分析完成", context)
+
+
+@mcp.tool
+def inspect_table_schema_tool(
+    table_name: str, workspace_root: str | None = None
+) -> dict[str, Any]:
+    """优先从后端仓库 SQL 结构文件解析字段，缺失时回退到真实数据库。"""
+    loaded = load_config_or_error(workspace_root)
+    if isinstance(loaded, dict):
+        return loaded
+    root, config = loaded
+    backend_root = (root / config.projects.backend.path).resolve()
+    database_result = resolve_database_config(root, config)
+    result = inspect_table_schema(
+        backend_root,
+        table_name,
+        database_result["database"] if database_result.get("ok") else None,
+    )
+    result["workspace_root"] = str(root)
+    if result["resolved"]:
+        return success_response("表结构解析成功", result)
+    return error_response("table_schema_unresolved", result["message"], result)
+
+
+@mcp.tool
+def generate_codegen_scaffold_tool(
+    table_name: str,
+    workspace_root: str | None = None,
+    module_name: str | None = None,
+    business_name: str | None = None,
+    entity_name: str | None = None,
+    menu_name: str | None = None,
+    parent_menu_name: str | None = None,
+    parent_menu_id: int | None = None,
+    include_backend: bool = True,
+    include_frontend: bool = True,
+    write_files: bool = False,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """根据当前上下文直接生成首版代码骨架，可选择只预览或直接写入工作区。"""
+    loaded = load_config_or_error(workspace_root)
+    if isinstance(loaded, dict):
+        return loaded
+    root, config = loaded
+    resolution = infer_table_resolution(table_name, config)
+    context = build_codegen_context(
+        root,
+        config,
+        table_name,
+        module_name=module_name or resolution.module,
+        business_name=business_name or resolution.business,
+        entity_name=entity_name or resolution.entity,
+        menu_name=menu_name,
+        parent_menu_name=parent_menu_name,
+        parent_menu_id=parent_menu_id,
+    )
+    generated_files = generate_scaffold_files(
+        context,
+        overwrite=overwrite,
+        include_backend=include_backend,
+        include_frontend=include_frontend,
+    )
+    result: dict[str, Any] = {
+        "workspace_root": str(root),
+        "table_name": table_name,
+        "resolved_from_config": resolution.model_dump(),
+        "context": context,
+        "generated_files": [file.model_dump() for file in generated_files],
+    }
+    if write_files:
+        write_result = write_generated_files(root, config, generated_files)
+        write_result["workspace_root"] = str(root)
+        result["write_result"] = write_result
+        if write_result["ok"]:
+            return success_response("代码骨架已生成并写入工作区", result)
+        return error_response("generate_codegen_scaffold_failed", "代码骨架生成成功，但写入存在失败项", result)
+    return success_response("代码骨架生成成功", result)
+
+
+@mcp.tool
 def write_generated_files_tool(
     files: list[dict[str, Any]], workspace_root: str | None = None
 ) -> dict[str, Any]:
@@ -224,7 +353,41 @@ def write_generated_files_tool(
     return error_response("write_generated_files_failed", "生成文件写入存在失败项", result)
 
 
+@mcp.tool
+def write_mysql_migration_tool(
+    migration_name: str,
+    sql_content: str,
+    workspace_root: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """将新的 SQL 结构以 Laravel 风格文件名写入 sql/mysql/migrations 目录。"""
+    loaded = load_config_or_error(workspace_root)
+    if isinstance(loaded, dict):
+        return loaded
+    root, config = loaded
+    backend_root = (root / config.projects.backend.path).resolve()
+    result = write_mysql_migration(
+        backend_root,
+        migration_name,
+        sql_content,
+        overwrite=overwrite,
+    )
+    result["workspace_root"] = str(root)
+    if result["ok"]:
+        return success_response("SQL 迁移文件写入成功", result)
+    return error_response("write_mysql_migration_failed", result["message"], result)
+
+
 def infer_table_resolution(table_name: str, config: WorkspaceConfig) -> TableResolution:
+    if not config.codegen.manual_rules:
+        inferred_module = table_name.split("_", 1)[0] if "_" in table_name else "system"
+        return TableResolution(
+            module=inferred_module,
+            matched_by="fallback",
+            business=table_name,
+            entity=snake_to_pascal(table_name),
+        )
+
     for manual_rule in config.codegen.manual_rules:
         for table_rule in manual_rule.table_rules:
             if table_rule.table == table_name:

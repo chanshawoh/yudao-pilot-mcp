@@ -85,11 +85,11 @@ projects:
 
 database:
   mode: auto
-  host: ""
+  host: "localhost"
   port: 3306
   database: ""
-  username: ""
-  password: ""
+  username: "root"
+  password: "123456"
 
 codegen:
   routing:
@@ -232,10 +232,23 @@ AI 应用负责：
 - `load_workspace_config`
 - `init_workspace_config`
 - `inspect_project_path`
+- `compare_codegen_reference_projects`
 - `validate_workspace_projects`
 - `resolve_database_config`
 - `infer_codegen_plan`
+- `inspect_codegen_context`
+- `inspect_table_schema`
+- `generate_codegen_scaffold`
 - `write_generated_files`
+- `write_mysql_migration`
+
+其中：
+
+- `compare_codegen_reference_projects` 用来确认 `ruoyi-vue-pro` 和 `ruoyi-vue-pro-jdk17` 的代码生成核心是否可复用
+- `inspect_codegen_context` 会补齐模块名、业务名、实体名、权限标识、后端默认 codegen 配置、前端模板类型、菜单父级候选、生成文件计划和迁移文件建议路径
+- `inspect_table_schema` 会从后端仓库的 MySQL 结构文件中解析指定表的字段信息，供后续字段级代码生成复用
+- `generate_codegen_scaffold` 会基于当前上下文直接生成第一版后端和前端骨架代码，可只预览，也可直接写入工作区
+- `write_mysql_migration` 会把新增 SQL 结构写入 `sql/mysql/migrations/`，文件名采用 Laravel 风格时间戳
 
 ## 目录结构建议
 
@@ -260,6 +273,39 @@ yudao-pilot-mcp/
 - 产品与商业说明：[docs/product.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/docs/product.md)
 - 路线图文档：[docs/roadmap.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/docs/roadmap.md)
 
+## 开发测试
+
+项目已内置开发期测试能力，推荐直接使用当前 `.venv` 运行：
+
+```bash
+./.venv/bin/python -m pytest
+```
+
+测试覆盖了这些核心能力：
+
+- 项目类型识别
+- 工作区配置校验
+- 后端本地数据库配置解析
+- MySQL 表结构解析
+- 代码生成上下文构建
+- 首版骨架代码生成
+- 后端目标落盘根目录修正
+
+开发用工作区配置样例已生成在：
+
+- [tests/fixtures/dev-workspace/.yudao-pilot/config.yaml](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/tests/fixtures/dev-workspace/.yudao-pilot/config.yaml)
+
+如果你要本地联调 MCP 工具，直接把该样例作为工作区根目录即可。
+
 ## 当前状态
 
-当前仓库还处于方案和文档阶段，下一步建议直接开始搭建 MCP 服务骨架和工作区配置流程。
+当前仓库已经完成第一版 MCP 服务骨架，具备以下基础能力：
+
+- 初始化和加载 `./.yudao-pilot/config.yaml`
+- 校验后端和前端项目类型是否与配置严格匹配
+- 对比 `ruoyi-vue-pro` 与 `ruoyi-vue-pro-jdk17` 的代码生成核心差异
+- 从后端本地 `application*.yaml` 解析数据库连接
+- 推导表对应的模块、业务名、实体名、前端模板和菜单上下文
+- 将新的 MySQL 迁移文件写入 `sql/mysql/migrations/`
+
+当前推荐直接以 `ruoyi-vue-pro-jdk17` 作为第一版参考实现继续开发。

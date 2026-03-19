@@ -3,4 +3,5 @@ __pycache__/
 .DS_Store
 .venv/
 
-yudao-projects
+.yudao-pilot/
+yudao-projects/

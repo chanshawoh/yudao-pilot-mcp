@@ -15,7 +15,13 @@ authors = [
 dependencies = [
   "fastmcp>=2.7.0",
   "pydantic>=2.8.0",
+  "PyMySQL>=1.1.1",
   "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.0",
 ]
 
 [project.scripts]
@@ -23,3 +29,7 @@ yudao-pilot = "yudao_pilot.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/yudao_pilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

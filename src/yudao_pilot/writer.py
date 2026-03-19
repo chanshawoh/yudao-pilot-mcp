@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .config import WorkspaceConfig
-from .inspector import resolve_project_path
+from .error_codes import is_manual_error_code_file, merge_manual_error_code_file
+from .inspector import resolve_backend_repo_root, resolve_project_path
 from .models import GeneratedFile, WriteResult
 
 
@@ -28,6 +29,32 @@ def write_generated_files(
                 )
             )
             continue
+
+        if generated_file.target_kind == "backend":
+            backend_module_dir = resolve_backend_module_dir(base_dir, generated_file.relative_path)
+            if backend_module_dir is None:
+                results.append(
+                    WriteResult(
+                        target_kind=generated_file.target_kind,
+                        target_type=generated_file.target_type,
+                        path=str((base_dir / generated_file.relative_path).resolve()),
+                        written=False,
+                        reason="目标后端模块不存在，拒绝创建新的模块结构",
+                    )
+                )
+                continue
+            if is_manual_error_code_file(generated_file.relative_path):
+                merged, merged_path, merge_reason = merge_manual_error_code_file(base_dir, generated_file)
+                results.append(
+                    WriteResult(
+                        target_kind=generated_file.target_kind,
+                        target_type=generated_file.target_type,
+                        path=merged_path,
+                        written=merged,
+                        reason=None if merged else merge_reason,
+                    )
+                )
+                continue
 
         output_path = (base_dir / generated_file.relative_path).resolve()
         if not is_relative_to(output_path, base_dir):
@@ -78,7 +105,8 @@ def resolve_target_base_dir(
     target_type: str,
 ) -> Path | None:
     if target_kind == "backend" and config.projects.backend.type == target_type:
-        return resolve_project_path(workspace_root, config.projects.backend.path)
+        backend_path = resolve_project_path(workspace_root, config.projects.backend.path)
+        return resolve_backend_repo_root(backend_path)
 
     if target_kind == "frontend":
         for frontend in config.projects.frontend:
@@ -93,3 +121,14 @@ def is_relative_to(candidate: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def resolve_backend_module_dir(base_dir: Path, relative_path: str) -> Path | None:
+    relative = Path(relative_path)
+    parts = relative.parts
+    if not parts:
+        return None
+    module_dir = base_dir / parts[0]
+    if not module_dir.exists() or not module_dir.is_dir():
+        return None
+    return module_dir
