@@ -1,0 +1,237 @@
+{
+  "project": {
+    "name": "Yudao Pilot",
+    "description": "面向 yudao 生态的 MCP 智能开发助手",
+    "tech_stack": [
+      "Python",
+      "FastMCP",
+      "Pydantic v2",
+      "PyYAML",
+      "PyMySQL",
+      "pytest"
+    ],
+    "created_at": "2026-03-20"
+  },
+  "global_status": "in_progress",
+  "current_task_id": "T-010",
+  "tasks": [
+    {
+      "id": "T-001",
+      "name": "需求澄清与范围确认",
+      "type": "analysis",
+      "status": "done",
+      "depends_on": [],
+      "outputs": [
+        "README.md",
+        "docs/product.md",
+        "docs/roadmap.md"
+      ],
+      "notes": "已明确第一版只做工作区识别、数据库读取、代码生成路由与安全写入；不做数据库副本和同步合并。"
+    },
+    {
+      "id": "T-002",
+      "name": "技术选型与架构决策",
+      "type": "analysis",
+      "status": "done",
+      "depends_on": [
+        "T-001"
+      ],
+      "outputs": [
+        "src/yudao_pilot/server.py",
+        "src/yudao_pilot/models.py",
+        ".ai/bootstrap.md"
+      ],
+      "notes": "已确定使用 Python + FastMCP + Stdio + MySQL，并以 ruoyi-vue-pro-jdk17 作为首版主要参考实现。"
+    },
+    {
+      "id": "T-003",
+      "name": "项目结构初始化",
+      "type": "scaffold",
+      "status": "done",
+      "depends_on": [
+        "T-002"
+      ],
+      "outputs": [
+        "pyproject.toml",
+        "src/yudao_pilot/config.py",
+        "src/yudao_pilot/inspector.py",
+        "src/yudao_pilot/database.py",
+        "src/yudao_pilot/schema.py",
+        "src/yudao_pilot/codegen.py",
+        "src/yudao_pilot/scaffold.py",
+        "src/yudao_pilot/writer.py",
+        "src/yudao_pilot/error_codes.py",
+        ".yudao-pilot/config.yaml"
+      ],
+      "notes": "项目骨架已完成，根目录开发配置已生成。"
+    },
+    {
+      "id": "T-004",
+      "name": "中文文档与配置模型落地",
+      "type": "doc",
+      "status": "done",
+      "depends_on": [
+        "T-003"
+      ],
+      "outputs": [
+        "README.md",
+        "docs/product.md",
+        "docs/roadmap.md"
+      ],
+      "notes": "README 已补齐配置字段说明，示例配置保持通用，不写死本机数据库名。"
+    },
+    {
+      "id": "T-005",
+      "name": "项目指纹识别与工作区校验",
+      "type": "coding",
+      "status": "done",
+      "depends_on": [
+        "T-003"
+      ],
+      "outputs": [
+        "src/yudao_pilot/inspector.py",
+        "tests/test_project_detection.py",
+        "tests/test_dev_workspace.py"
+      ],
+      "notes": "已支持后端与前端项目识别，不依赖目录名；同一工作区只允许一个后端和多个不重复前端类型。"
+    },
+    {
+      "id": "T-006",
+      "name": "数据库配置解析与表结构回退读取",
+      "type": "coding",
+      "status": "done",
+      "depends_on": [
+        "T-003"
+      ],
+      "outputs": [
+        "src/yudao_pilot/database.py",
+        "src/yudao_pilot/schema.py",
+        "tests/test_mcp_tools.py"
+      ],
+      "notes": "已实现配置优先、后端本地配置回退；表结构默认读 SQL dump，缺失时回退到真实数据库。"
+    },
+    {
+      "id": "T-007",
+      "name": "代码生成骨架与安全写入",
+      "type": "coding",
+      "status": "done",
+      "depends_on": [
+        "T-005",
+        "T-006"
+      ],
+      "outputs": [
+        "src/yudao_pilot/codegen.py",
+        "src/yudao_pilot/scaffold.py",
+        "src/yudao_pilot/writer.py"
+      ],
+      "notes": "已支持 merchant / merchant_user 真实生成；后端写入保持 yudao 模块平铺结构，不再伪造 server/api 子模块。"
+    },
+    {
+      "id": "T-008",
+      "name": "错误码范围维护与自动合并",
+      "type": "coding",
+      "status": "done",
+      "depends_on": [
+        "T-007"
+      ],
+      "outputs": [
+        "src/yudao_pilot/error_codes.py",
+        "src/yudao_pilot/writer.py",
+        "tests/test_writer.py"
+      ],
+      "notes": "生成的 `_手动操作.java` 已在写入阶段自动并入真实 `ErrorCodeConstants.java`，必要时可维护 `ServiceErrorCodeRange.java`。"
+    },
+    {
+      "id": "T-009",
+      "name": "测试体系与开发夹具整理",
+      "type": "test",
+      "status": "done",
+      "depends_on": [
+        "T-006",
+        "T-007",
+        "T-008"
+      ],
+      "outputs": [
+        "tests/conftest.py",
+        "tests/test_mcp_tools.py",
+        "tests/test_writer.py",
+        "tests/fixtures/dev-workspace/.yudao-pilot/config.yaml"
+      ],
+      "notes": "当前自动化测试已通过；测试夹具配置已补中文注释说明用途与是否需要填写数据库。"
+    },
+    {
+      "id": "T-010",
+      "name": "真实生成产物收口与前端写入策略整理",
+      "type": "analysis",
+      "status": "pending",
+      "depends_on": [
+        "T-009"
+      ],
+      "outputs": [],
+      "notes": "下一步建议梳理前端已写入测试产物、确定是否需要清理旧文件并收口 overwrite 策略。"
+    }
+  ],
+  "task_statuses": {
+    "pending": "任务已登记但尚未开始执行，且前置条件尚未真正消化为本轮动作",
+    "in_progress": "当前主线任务，正在执行中；同一时刻只能有一个 current_task_id 处于该状态",
+    "blocked": "任务因主线切换、缺少依赖、环境不足或需求未决而暂停，恢复前不得继续推进",
+    "done": "任务已完成，且已登记 outputs / notes / finished_at（如适用）",
+    "failed": "任务执行失败，需在 notes 中记录失败原因与建议处理路径"
+  },
+  "task_types": {
+    "analysis": "输出结构化分析文档",
+    "scaffold": "生成项目目录与基础配置",
+    "coding": "可运行的核心功能代码",
+    "config": "环境与配置文件",
+    "doc": "Markdown 文档",
+    "test": "可执行测试用例"
+  },
+  "definition_of_done": {
+    "analysis": [
+      "结论明确",
+      "无明显假设"
+    ],
+    "scaffold": [
+      "目录结构清晰",
+      "可正常编译"
+    ],
+    "coding": [
+      "无语法错误",
+      "核心逻辑完整"
+    ],
+    "config": [
+      "配置正确",
+      "环境可切换"
+    ],
+    "doc": [
+      "内容完整",
+      "格式规范"
+    ],
+    "test": [
+      "用例可执行",
+      "覆盖核心逻辑"
+    ]
+  },
+  "artifacts": [
+    "README.md",
+    "docs/product.md",
+    "docs/roadmap.md",
+    ".yudao-pilot/config.yaml",
+    "src/yudao_pilot/server.py",
+    "src/yudao_pilot/error_codes.py",
+    "tests/test_writer.py"
+  ],
+  "decision_log": [
+    "第一版不做数据库副本、DDL/DML 同步合并。",
+    "项目默认使用中文文档与中文说明。",
+    "后端参考实现优先采用 ruoyi-vue-pro-jdk17。",
+    "前端仅支持 yudao-ui-admin-vue3、yudao-ui-admin-vben、yudao-ui-admin-uniapp。",
+    "数据库配置按字段优先使用 config.yaml，留空字段再回退到后端本地环境配置。",
+    "后端真实写入必须保持 yudao 原有模块平铺结构。",
+    "错误码生成在写入阶段自动并入 ErrorCodeConstants.java，不保留 _手动操作.java。"
+  ],
+  "open_questions": [
+    "前端在真实写入测试过程中已产生部分测试文件，下一步是否需要统一清理并按最终策略重写？",
+    "错误码业务标题未来是否需要在 config.yaml 中增加显式中文名称字段，避免完全依赖自动推断？"
+  ]
+}
