@@ -13,7 +13,7 @@
     "created_at": "2026-03-20"
   },
   "global_status": "in_progress",
-  "current_task_id": "T-011",
+  "current_task_id": "T-012",
   "tasks": [
     {
       "id": "T-001",
@@ -177,12 +177,15 @@
       "id": "T-011",
       "name": "前端真实落盘清理与覆盖策略收口",
       "type": "coding",
-      "status": "pending",
+      "status": "done",
       "depends_on": [
         "T-010"
       ],
-      "outputs": [],
-      "notes": "下一步可继续处理前端历史测试产物清理、overwrite 策略细化，以及是否需要菜单/路由注册补全。"
+      "outputs": [
+        "src/yudao_pilot/scaffold.py",
+        "src/yudao_pilot/schema.py"
+      ],
+      "notes": "已完成：1) 清理 vben 项目下 16 个历史测试孤儿文件（根 src/ 8 个 + apps/web-ele/ 8 个）；2) 修复 schema.py 字段过滤，新增 INTERNAL_COLUMNS 排除 delete_token，修复 in_query 排除 base audit 列（update_time / tenant_id 等）；3) 修复 scaffold.py 模板（ServiceImpl 完整 CRUD、Service 返回 DO、Mapper 带 selectPage、Controller 使用 BeanUtils 转换、Mapper XML 去 TODO）；4) 修复已生成的 merchant + merchant_user 共 16 个 Java 文件；5) 修复 ErrorCodeConstants 错误码提示语；6) 确认 writer.py overwrite 策略和 6 种前端写入路径均正确。"
     }
   ],
   "task_statuses": {
@@ -234,6 +237,8 @@
     ".yudao-pilot/config.yaml",
     "src/yudao_pilot/server.py",
     "src/yudao_pilot/error_codes.py",
+    "src/yudao_pilot/scaffold.py",
+    "src/yudao_pilot/schema.py",
     "tests/test_writer.py"
   ],
   "decision_log": [
@@ -243,10 +248,12 @@
     "前端配置已切换为 codegen 枚举类型，支持 VUE3_ELEMENT_PLUS、4 种 Vben 模板与 VUE3_ADMIN_UNIAPP_WOT。",
     "数据库配置按字段优先使用 config.yaml，留空字段再回退到后端本地环境配置。",
     "后端真实写入必须保持 yudao 原有模块平铺结构。",
-    "错误码生成在写入阶段自动并入 ErrorCodeConstants.java，不保留 _手动操作.java。"
+    "错误码生成在写入阶段自动并入 ErrorCodeConstants.java，不保留 _手动操作.java。",
+    "scaffold.py 生成的 ServiceImpl 必须包含完整 CRUD 实现，Service 接口返回 DO，Controller 使用 BeanUtils 做 DO→RespVO 转换。",
+    "schema.py 字段过滤新增 INTERNAL_COLUMNS（delete_token 等），in_query 排除 base audit 列（create_time 除外）。",
+    "前端历史测试产物已清理，后续 overwrite=false 可安全防止重复写入。"
   ],
   "open_questions": [
-    "前端在真实写入测试过程中已产生部分测试文件，下一步是否需要统一清理并按最终策略重写？",
     "错误码业务标题未来是否需要在 config.yaml 中增加显式中文名称字段，避免完全依赖自动推断？"
   ]
 }

@@ -190,7 +190,6 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
     class_name = context["entity_name"]
     business_name = context["business_name"]
     module_name = context["module_name"]
-    permission = context["permission_prefix"]
     resource_package = resolve_resource_package(context["backend_project"]["type"])
     validation_package = resolve_validation_package(context["backend_project"]["type"])
     base_package = context["backend_codegen_defaults"]["base_package"]
@@ -198,62 +197,56 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
         f"""\
         package {package_name};
 
-        import {resource_package}.Resource;
-        import {validation_package}.Valid;
-        import org.springframework.validation.annotation.Validated;
-        import org.springframework.web.bind.annotation.DeleteMapping;
-        import org.springframework.web.bind.annotation.GetMapping;
-        import org.springframework.web.bind.annotation.PostMapping;
-        import org.springframework.web.bind.annotation.PutMapping;
-        import org.springframework.web.bind.annotation.RequestBody;
-        import org.springframework.web.bind.annotation.RequestMapping;
-        import org.springframework.web.bind.annotation.RequestParam;
-        import org.springframework.web.bind.annotation.RestController;
-
         import {base_package}.framework.common.pojo.CommonResult;
         import {base_package}.framework.common.pojo.PageResult;
+        import {base_package}.framework.common.util.object.BeanUtils;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}PageReqVO;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}RespVO;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}SaveReqVO;
+        import {base_package}.module.{module_name}.dal.dataobject.{business_name}.{class_name}DO;
         import {base_package}.module.{module_name}.service.{business_name}.{class_name}Service;
+        import {resource_package}.Resource;
+        import {validation_package}.Valid;
+        import org.springframework.validation.annotation.Validated;
+        import org.springframework.web.bind.annotation.*;
+
+        import static {base_package}.framework.common.pojo.CommonResult.success;
 
         @RestController
         @RequestMapping("/{module_name}/{business_name}")
         @Validated
         public class {class_name}Controller {{
 
-            /**
-             * 建议权限前缀：{permission}
-             * 父菜单解析结果：{context["menu_context"]["message"]}
-             */
             @Resource
             private {class_name}Service {lower_camel(class_name)}Service;
 
             @PostMapping("/create")
             public CommonResult<Long> create{class_name}(@Valid @RequestBody {class_name}SaveReqVO createReqVO) {{
-                return CommonResult.success({lower_camel(class_name)}Service.create{class_name}(createReqVO));
+                return success({lower_camel(class_name)}Service.create{class_name}(createReqVO));
             }}
 
             @PutMapping("/update")
             public CommonResult<Boolean> update{class_name}(@Valid @RequestBody {class_name}SaveReqVO updateReqVO) {{
                 {lower_camel(class_name)}Service.update{class_name}(updateReqVO);
-                return CommonResult.success(true);
+                return success(true);
             }}
 
             @DeleteMapping("/delete")
             public CommonResult<Boolean> delete{class_name}(@RequestParam("id") Long id) {{
                 {lower_camel(class_name)}Service.delete{class_name}(id);
-                return CommonResult.success(true);
+                return success(true);
             }}
 
             @GetMapping("/get")
             public CommonResult<{class_name}RespVO> get{class_name}(@RequestParam("id") Long id) {{
-                return CommonResult.success({lower_camel(class_name)}Service.get{class_name}(id));
+                {class_name}DO {lower_camel(class_name)} = {lower_camel(class_name)}Service.get{class_name}(id);
+                return success(BeanUtils.toBean({lower_camel(class_name)}, {class_name}RespVO.class));
             }}
 
             @GetMapping("/page")
-            public CommonResult<PageResult<{class_name}RespVO>> get{class_name}Page({class_name}PageReqVO pageReqVO) {{
-                return CommonResult.success({lower_camel(class_name)}Service.get{class_name}Page(pageReqVO));
+            public CommonResult<PageResult<{class_name}RespVO>> get{class_name}Page(@Valid {class_name}PageReqVO pageReqVO) {{
+                PageResult<{class_name}DO> pageResult = {lower_camel(class_name)}Service.get{class_name}Page(pageReqVO);
+                return success(BeanUtils.toBean(pageResult, {class_name}RespVO.class));
             }}
         }}
         """
@@ -299,17 +292,27 @@ def render_mapper(relative_path: str, context: dict[str, Any]) -> str:
     module_name = context["module_name"]
     business_name = context["business_name"]
     base_package = context["backend_codegen_defaults"]["base_package"]
+    query_fields = get_query_fields(context)
+    query_lines = render_mapper_query_lines(class_name, query_fields)
     return dedent(
         f"""\
         package {package_name};
 
-        import org.apache.ibatis.annotations.Mapper;
-
+        import {base_package}.framework.common.pojo.PageResult;
         import {base_package}.framework.mybatis.core.mapper.BaseMapperX;
+        import {base_package}.framework.mybatis.core.query.LambdaQueryWrapperX;
+        import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}PageReqVO;
         import {base_package}.module.{module_name}.dal.dataobject.{business_name}.{class_name}DO;
+        import org.apache.ibatis.annotations.Mapper;
 
         @Mapper
         public interface {class_name}Mapper extends BaseMapperX<{class_name}DO> {{
+
+            default PageResult<{class_name}DO> selectPage({class_name}PageReqVO reqVO) {{
+                return selectPage(reqVO, new LambdaQueryWrapperX<{class_name}DO>()
+        {query_lines}
+                        .orderByDesc({class_name}DO::getId));
+            }}
         }}
         """
     )
@@ -328,8 +331,6 @@ def render_mapper_xml(context: dict[str, Any]) -> str:
                 "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
         <mapper namespace="{base_package}.module.{module_name}.dal.mysql.{business_name}.{class_name}Mapper">
 
-            <!-- TODO Yudao Pilot: 根据字段定义补充 ResultMap、自定义 SQL 与复杂查询 -->
-
         </mapper>
         """
     )
@@ -341,26 +342,28 @@ def render_service(relative_path: str, context: dict[str, Any]) -> str:
     module_name = context["module_name"]
     business_name = context["business_name"]
     base_package = context["backend_codegen_defaults"]["base_package"]
+    validation_package = resolve_validation_package(context["backend_project"]["type"])
     return dedent(
         f"""\
         package {package_name};
 
         import {base_package}.framework.common.pojo.PageResult;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}PageReqVO;
-        import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}RespVO;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}SaveReqVO;
+        import {base_package}.module.{module_name}.dal.dataobject.{business_name}.{class_name}DO;
+        import {validation_package}.Valid;
 
         public interface {class_name}Service {{
 
-            Long create{class_name}({class_name}SaveReqVO createReqVO);
+            Long create{class_name}(@Valid {class_name}SaveReqVO createReqVO);
 
-            void update{class_name}({class_name}SaveReqVO updateReqVO);
+            void update{class_name}(@Valid {class_name}SaveReqVO updateReqVO);
 
             void delete{class_name}(Long id);
 
-            {class_name}RespVO get{class_name}(Long id);
+            {class_name}DO get{class_name}(Long id);
 
-            PageResult<{class_name}RespVO> get{class_name}Page({class_name}PageReqVO pageReqVO);
+            PageResult<{class_name}DO> get{class_name}Page({class_name}PageReqVO pageReqVO);
         }}
         """
     )
@@ -372,44 +375,66 @@ def render_service_impl(relative_path: str, context: dict[str, Any]) -> str:
     module_name = context["module_name"]
     business_name = context["business_name"]
     base_package = context["backend_codegen_defaults"]["base_package"]
+    resource_package = resolve_resource_package(context["backend_project"]["type"])
+    error_const = upper_snake(class_name) + "_NOT_EXISTS"
     return dedent(
         f"""\
         package {package_name};
 
-        import org.springframework.stereotype.Service;
-
         import {base_package}.framework.common.pojo.PageResult;
+        import {base_package}.framework.common.util.object.BeanUtils;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}PageReqVO;
-        import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}RespVO;
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}SaveReqVO;
-        import {base_package}.module.{module_name}.service.{business_name}.{class_name}Service;
+        import {base_package}.module.{module_name}.dal.dataobject.{business_name}.{class_name}DO;
+        import {base_package}.module.{module_name}.dal.mysql.{business_name}.{class_name}Mapper;
+        import {resource_package}.Resource;
+        import org.springframework.stereotype.Service;
+        import org.springframework.validation.annotation.Validated;
+
+        import static {base_package}.framework.common.exception.util.ServiceExceptionUtil.exception;
+        import static {base_package}.module.{module_name}.enums.ErrorCodeConstants.{error_const};
 
         @Service
+        @Validated
         public class {class_name}ServiceImpl implements {class_name}Service {{
+
+            @Resource
+            private {class_name}Mapper {lower_camel(class_name)}Mapper;
 
             @Override
             public Long create{class_name}({class_name}SaveReqVO createReqVO) {{
-                throw new UnsupportedOperationException("TODO Yudao Pilot: 根据表字段和业务规则补齐 create 逻辑");
+                {class_name}DO {lower_camel(class_name)} = BeanUtils.toBean(createReqVO, {class_name}DO.class);
+                {lower_camel(class_name)}Mapper.insert({lower_camel(class_name)});
+                return {lower_camel(class_name)}.getId();
             }}
 
             @Override
             public void update{class_name}({class_name}SaveReqVO updateReqVO) {{
-                throw new UnsupportedOperationException("TODO Yudao Pilot: 根据表字段和业务规则补齐 update 逻辑");
+                validate{class_name}Exists(updateReqVO.getId());
+                {class_name}DO updateObj = BeanUtils.toBean(updateReqVO, {class_name}DO.class);
+                {lower_camel(class_name)}Mapper.updateById(updateObj);
             }}
 
             @Override
             public void delete{class_name}(Long id) {{
-                throw new UnsupportedOperationException("TODO Yudao Pilot: 根据业务规则补齐 delete 逻辑");
+                validate{class_name}Exists(id);
+                {lower_camel(class_name)}Mapper.deleteById(id);
+            }}
+
+            private void validate{class_name}Exists(Long id) {{
+                if ({lower_camel(class_name)}Mapper.selectById(id) == null) {{
+                    throw exception({error_const});
+                }}
             }}
 
             @Override
-            public {class_name}RespVO get{class_name}(Long id) {{
-                throw new UnsupportedOperationException("TODO Yudao Pilot: 根据表字段和业务规则补齐 get 逻辑");
+            public {class_name}DO get{class_name}(Long id) {{
+                return {lower_camel(class_name)}Mapper.selectById(id);
             }}
 
             @Override
-            public PageResult<{class_name}RespVO> get{class_name}Page({class_name}PageReqVO pageReqVO) {{
-                throw new UnsupportedOperationException("TODO Yudao Pilot: 根据表字段和业务规则补齐 page 逻辑");
+            public PageResult<{class_name}DO> get{class_name}Page({class_name}PageReqVO pageReqVO) {{
+                return {lower_camel(class_name)}Mapper.selectPage(pageReqVO);
             }}
         }}
         """
@@ -1204,6 +1229,29 @@ def render_uniapp_detail(relative_path: str, context: dict[str, Any]) -> str:
     )
 
 
+def render_mapper_query_lines(class_name: str, query_fields: list[dict[str, Any]]) -> str:
+    if not query_fields:
+        return ""
+    lines: list[str] = []
+    for field in query_fields:
+        java_field = field["java_field"]
+        getter = f"{class_name}DO::get{java_field[0].upper()}{java_field[1:]}"
+        java_type = normalize_java_field_type(field)
+        if java_type in {"LocalDateTime", "LocalDate"}:
+            lines.append(
+                f"                .betweenIfPresent({getter}, reqVO.get{java_field[0].upper()}{java_field[1:]}())"
+            )
+        elif java_type == "String":
+            lines.append(
+                f"                .likeIfPresent({getter}, reqVO.get{java_field[0].upper()}{java_field[1:]}())"
+            )
+        else:
+            lines.append(
+                f"                .eqIfPresent({getter}, reqVO.get{java_field[0].upper()}{java_field[1:]}())"
+            )
+    return "\n".join(lines)
+
+
 def render_plain_placeholder(relative_path: str, context: dict[str, Any]) -> str:
     return f"// TODO Yudao Pilot: 请继续根据 {context['table_name']} 的字段定义补齐 {relative_path}\n"
 
@@ -1394,12 +1442,13 @@ def render_ts_interface(name: str, fields: list[dict[str, Any]]) -> str:
 
 
 def render_vue3_table_column(field: dict[str, Any]) -> str:
+    label = sanitize_column_comment(field["column_comment"])
     width = "120" if field["ts_type"] == "number" or field["java_field"] == "id" else "180"
-    return f'              <el-table-column label="{field["column_comment"]}" prop="{field["java_field"]}" width="{width}" />'
+    return f'              <el-table-column label="{label}" prop="{field["java_field"]}" width="{width}" />'
 
 
 def render_vue3_form_item(field: dict[str, Any]) -> str:
-    label = field["column_comment"]
+    label = sanitize_column_comment(field["column_comment"])
     model = f'formData.{field["java_field"]}'
     placeholder = escape_html_attr(f"请输入{label}")
     html_type = field["html_type"]
@@ -1431,7 +1480,7 @@ def render_vben_column(field: dict[str, Any]) -> str:
     lines = [
         "{",
         f"  field: '{field['java_field']}',",
-        f"  title: '{field['column_comment']}',",
+        f"  title: '{sanitize_column_comment(field['column_comment'])}',",
         f"  minWidth: {resolve_vben_column_width(field)},",
     ]
     if field["java_type"] == "LocalDateTime":
@@ -1488,7 +1537,7 @@ def render_vben_search_field(field: dict[str, Any], frontend_plan: dict[str, Any
     return (
         "{\n"
         f"  fieldName: '{field['java_field']}',\n"
-        f"  label: '{field['column_comment']}',\n"
+        f"  label: '{sanitize_column_comment(field['column_comment'])}',\n"
         f"  component: '{component}',\n"
         "  componentProps: {\n"
         f"{component_props_block}\n"
@@ -1573,7 +1622,7 @@ def render_vben_form_field(field: dict[str, Any], frontend_plan: dict[str, Any])
     return (
         "{\n"
         f"  fieldName: '{field['java_field']}',\n"
-        f"  label: '{field['column_comment']}',\n"
+        f"  label: '{sanitize_column_comment(field['column_comment'])}',\n"
         f"  component: '{component}',\n"
         f"{rules_line}"
         f"{component_block}"
@@ -1679,7 +1728,7 @@ def render_vben_api_interface_body(fields: list[dict[str, Any]]) -> str:
         },
     ]
     return "\n".join(
-        f"/** {field['column_comment']} */\n{field['java_field']}?: {field['ts_type']};"
+        f"/** {sanitize_column_comment(field['column_comment'])} */\n{field['java_field']}?: {field['ts_type']};"
         for field in effective_fields
     )
 
@@ -1838,7 +1887,7 @@ def resolve_vben_column_width(field: dict[str, Any]) -> int:
 
 
 def should_use_vben_tooltip(field: dict[str, Any]) -> bool:
-    return field["html_type"] in {"textarea"} or len(field["column_comment"]) >= 18
+    return field["html_type"] in {"textarea"} or len(sanitize_column_comment(field["column_comment"])) >= 18
 
 
 def resolve_vben_clear_prop_name(frontend_plan: dict[str, Any]) -> str:
@@ -1871,20 +1920,23 @@ def escape_js_string(value: str) -> str:
 
 
 def render_uniapp_search_item(field: dict[str, Any]) -> str:
-    placeholder = escape_html_attr(f"请输入{field['column_comment']}")
+    label = sanitize_column_comment(field['column_comment'])
+    placeholder = escape_html_attr(f"请输入{label}")
     return f'    <input class="search-input" placeholder="{placeholder}" />'
 
 
 def render_uniapp_form_item(field: dict[str, Any]) -> str:
-    placeholder = escape_html_attr(f"请输入{field['column_comment']}")
+    label = sanitize_column_comment(field['column_comment'])
+    placeholder = escape_html_attr(f"请输入{label}")
     if field["html_type"] == "textarea":
         return f'    <textarea class="textarea" placeholder="{placeholder}" />'
     return f'    <input class="input" placeholder="{placeholder}" />'
 
 
 def render_uniapp_detail_row(field: dict[str, Any]) -> str:
+    label = sanitize_column_comment(field["column_comment"])
     return (
-        f'    <view class="row"><text>{field["column_comment"]}</text>'
+        f'    <view class="row"><text>{label}</text>'
         f'<text>{{{{ detail?.{field["java_field"]} ?? "-" }}}}</text></view>'
     )
 

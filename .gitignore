@@ -6,3 +6,4 @@ __pycache__/
 
 .yudao-pilot/
 yudao-projects/
+uv.lock

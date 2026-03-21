@@ -17,6 +17,10 @@ BASE_AUDIT_COLUMNS = {
     "tenant_id",
 }
 
+INTERNAL_COLUMNS = {
+    "delete_token",
+}
+
 
 def inspect_table_schema(
     backend_root: Path,
@@ -194,6 +198,7 @@ def parse_database_column(row: dict[str, Any]) -> dict[str, Any]:
     java_field = snake_to_camel(column_name)
     is_primary_key = str(row.get("COLUMN_KEY") or "").upper() == "PRI"
     is_base_column = column_name in BASE_AUDIT_COLUMNS
+    is_internal = column_name in INTERNAL_COLUMNS
     is_auto_increment = "auto_increment" in str(row.get("EXTRA") or "").lower()
     nullable = str(row.get("IS_NULLABLE") or "").upper() == "YES"
 
@@ -210,11 +215,11 @@ def parse_database_column(row: dict[str, Any]) -> dict[str, Any]:
         "primary_key": is_primary_key,
         "auto_increment": is_auto_increment,
         "is_base_column": is_base_column,
-        "in_do": not is_base_column,
-        "in_save": not is_base_column and not is_primary_key,
-        "in_resp": not is_base_column or column_name == "create_time",
-        "in_list": not is_base_column and column_name not in {"description", "content"},
-        "in_query": is_query_column(column_name, sql_type),
+        "in_do": not is_base_column and not is_internal,
+        "in_save": not is_base_column and not is_primary_key and not is_internal,
+        "in_resp": (not is_base_column or column_name == "create_time") and not is_internal,
+        "in_list": not is_base_column and column_name not in {"description", "content"} and not is_internal,
+        "in_query": is_query_column(column_name, sql_type) and (not is_base_column or column_name == "create_time") and not is_internal,
     }
 
 
@@ -245,6 +250,7 @@ def parse_column_line(line: str, primary_keys: set[str]) -> dict[str, Any] | Non
     html_type = infer_html_type(column_name, sql_type)
     is_primary_key = column_name in primary_keys
     is_base_column = column_name in BASE_AUDIT_COLUMNS
+    is_internal = column_name in INTERNAL_COLUMNS
     is_auto_increment = "AUTO_INCREMENT" in line.upper()
     nullable = "NOT NULL" not in line.upper()
 
@@ -261,11 +267,11 @@ def parse_column_line(line: str, primary_keys: set[str]) -> dict[str, Any] | Non
         "primary_key": is_primary_key,
         "auto_increment": is_auto_increment,
         "is_base_column": is_base_column,
-        "in_do": not is_base_column,
-        "in_save": not is_base_column and not is_primary_key,
-        "in_resp": not is_base_column or column_name == "create_time",
-        "in_list": not is_base_column and column_name not in {"description", "content"},
-        "in_query": is_query_column(column_name, sql_type),
+        "in_do": not is_base_column and not is_internal,
+        "in_save": not is_base_column and not is_primary_key and not is_internal,
+        "in_resp": (not is_base_column or column_name == "create_time") and not is_internal,
+        "in_list": not is_base_column and column_name not in {"description", "content"} and not is_internal,
+        "in_query": is_query_column(column_name, sql_type) and (not is_base_column or column_name == "create_time") and not is_internal,
     }
 
 
