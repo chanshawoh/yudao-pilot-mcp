@@ -78,9 +78,13 @@ projects:
     config_profile: local
 
   frontend:
-    - type: yudao-ui-admin-vue3
+    - type: VUE3_ELEMENT_PLUS
       path: ../yudao-ui-admin-vue3
-    - type: yudao-ui-admin-uniapp
+    - type: VUE3_VBEN5_ANTD_SCHEMA
+      path: ../yudao-ui-admin-vben
+    - type: VUE3_VBEN5_EP_GENERAL
+      path: ../yudao-ui-admin-vben
+    - type: VUE3_ADMIN_UNIAPP_WOT
       path: ../yudao-ui-admin-uniapp
 
 database:
@@ -138,10 +142,16 @@ codegen:
 - `frontend`
   - 当前工作区下的前端项目列表
 - `frontend[].type`
-  - 前端项目类型
-  - 当前支持：`yudao-ui-admin-vue3`、`yudao-ui-admin-vben`、`yudao-ui-admin-uniapp`
+  - 前端代码生成模板类型
+  - 当前支持：`VUE3_ELEMENT_PLUS`、`VUE3_VBEN5_ANTD_SCHEMA`、`VUE3_VBEN5_ANTD_GENERAL`、`VUE3_VBEN5_EP_SCHEMA`、`VUE3_VBEN5_EP_GENERAL`、`VUE3_ADMIN_UNIAPP_WOT`
 - `frontend[].path`
   - 前端项目相对当前工作区根目录的路径
+  - 同一个 `path` 可以被多个不同的前端枚举复用，只要 `type` 不重复即可
+  - 其中：
+  - `VUE3_ELEMENT_PLUS` 对应 `yudao-ui-admin-vue3`
+  - `VUE3_VBEN5_ANTD_SCHEMA`、`VUE3_VBEN5_ANTD_GENERAL` 对应 `yudao-ui-admin-vben/apps/web-antd`
+  - `VUE3_VBEN5_EP_SCHEMA`、`VUE3_VBEN5_EP_GENERAL` 对应 `yudao-ui-admin-vben/apps/web-ele`
+  - `VUE3_ADMIN_UNIAPP_WOT` 对应 `yudao-ui-admin-uniapp`
 
 #### `database`
 
@@ -238,6 +248,7 @@ AI 应用负责：
 - `infer_codegen_plan`
 - `inspect_codegen_context`
 - `inspect_table_schema`
+- `generate_codegen_sql`
 - `generate_codegen_scaffold`
 - `write_generated_files`
 - `write_mysql_migration`
@@ -247,13 +258,80 @@ AI 应用负责：
 - `compare_codegen_reference_projects` 用来确认 `ruoyi-vue-pro` 和 `ruoyi-vue-pro-jdk17` 的代码生成核心是否可复用
 - `inspect_codegen_context` 会补齐模块名、业务名、实体名、权限标识、后端默认 codegen 配置、前端模板类型、菜单父级候选、生成文件计划和迁移文件建议路径
 - `inspect_table_schema` 会从后端仓库的 MySQL 结构文件中解析指定表的字段信息，供后续字段级代码生成复用
+- `generate_codegen_sql` 会生成 MySQL 菜单迁移 SQL，自动合并 H2 `create_tables.sql` / `clean.sql`，并可把菜单幂等写入真实数据库
 - `generate_codegen_scaffold` 会基于当前上下文直接生成第一版后端和前端骨架代码，可只预览，也可直接写入工作区
 - `write_mysql_migration` 会把新增 SQL 结构写入 `sql/mysql/migrations/`，文件名采用 Laravel 风格时间戳
+
+## SQL 与菜单生成
+
+当前仓库已经支持面向代码生成的 SQL 流程，重点包含：
+
+- 生成 MySQL 菜单迁移 SQL
+- 自动定位后端模块的 H2 测试 SQL 文件
+- 把 H2 建表和清理语句幂等合并到对应模块
+- 把菜单数据幂等执行到真实数据库
+
+相关工具：
+
+- `generate_codegen_sql`
+
+典型参数：
+
+- `table_name`
+  - 目标表名
+- `menu_name`
+  - 业务菜单中文名称，例如 `商家用户`
+- `module_menu_name`
+  - 模块根菜单中文名称，例如 `会员中心`
+- `menu_icon`
+  - 业务菜单图标，可选，使用 Iconify 字符串，例如 `ep:shop`
+- `module_menu_icon`
+  - 模块根菜单图标，可选，使用 Iconify 字符串，例如 `ep:bicycle`
+- `write_files`
+  - 是否把 SQL 文件真实写入仓库
+- `apply_menu_to_database`
+  - 是否把菜单数据真实执行到数据库
+
+示例调用思路：
+
+- AI 先根据业务语义确定 `menu_name`、`module_menu_name`
+- 如果能明确图标，再显式传 `menu_icon`、`module_menu_icon`
+- 如果不传图标，MCP 会自动按模块和业务关键词推断
+
+### 菜单图标说明
+
+菜单图标最终写入后端 `system_menu.icon` 字段，前端直接消费这个字符串。
+
+图标必须使用 `Iconify` 格式，例如：
+
+- `ep:shop`
+- `ep:avatar`
+- `ep:menu`
+- `lucide:user`
+- `ant-design:message-filled`
+
+当前默认策略：
+
+- AI 显式传图标时，优先使用 AI 传入值
+- 未传时，MCP 会尝试从已有菜单和业务关键词自动推断
+- 若仍无法推断，则回退到模块默认图标
+
+当前内置的一些常见默认值：
+
+- `merchant` 相关业务默认使用 `ep:shop`
+- `user`、`member_user` 相关业务默认使用 `ep:avatar`
+- `member` 模块根菜单默认使用 `ep:bicycle`
+- `infra` 模块根菜单默认使用 `ep:monitor`
 
 ## 目录结构建议
 
 ```text
 yudao-pilot-mcp/
+├── .ai/
+│   ├── agent.md
+│   ├── ai-integration.md
+│   ├── bootstrap.md
+│   └── dev-standards.md
 ├── README.md
 ├── docs/
 │   ├── product.md
@@ -270,6 +348,8 @@ yudao-pilot-mcp/
 
 ## 相关文档
 
+- Agent 主协议：[.ai/agent.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/.ai/agent.md)
+- AI 应用接入协议：[.ai/ai-integration.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/.ai/ai-integration.md)
 - 产品与商业说明：[docs/product.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/docs/product.md)
 - 路线图文档：[docs/roadmap.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/docs/roadmap.md)
 
@@ -288,6 +368,7 @@ yudao-pilot-mcp/
 - 后端本地数据库配置解析
 - MySQL 表结构解析
 - 代码生成上下文构建
+- 菜单 SQL、H2 SQL 与菜单图标推断
 - 首版骨架代码生成
 - 后端目标落盘根目录修正
 
@@ -307,5 +388,6 @@ yudao-pilot-mcp/
 - 从后端本地 `application*.yaml` 解析数据库连接
 - 推导表对应的模块、业务名、实体名、前端模板和菜单上下文
 - 将新的 MySQL 迁移文件写入 `sql/mysql/migrations/`
+- 生成菜单 SQL、合并 H2 测试 SQL，并支持幂等写入菜单到真实数据库
 
 当前推荐直接以 `ruoyi-vue-pro-jdk17` 作为第一版参考实现继续开发。

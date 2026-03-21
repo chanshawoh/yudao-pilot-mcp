@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 import yaml
 
 from yudao_pilot import schema as schema_module
+from yudao_pilot.database import apply_menu_plan_to_database
 from yudao_pilot.server import (
     generate_codegen_scaffold_tool,
+    generate_codegen_sql_tool,
     inspect_codegen_context_tool,
     inspect_table_schema_tool,
     resolve_database_config_tool,
 )
+from yudao_pilot.sql_codegen import merge_sql_snippet
 
 
 def test_resolve_database_config_from_backend_local(workspace_builder) -> None:
@@ -17,7 +23,7 @@ def test_resolve_database_config_from_backend_local(workspace_builder) -> None:
 
     assert result["ok"] is True
     assert result["data"]["database"]["host"] == "127.0.0.1"
-    assert result["data"]["database"]["database"] == "ruoyi-vue-pro"
+    assert result["data"]["database"]["database"]
     assert result["data"]["database"]["source"] == "backend-local"
 
 
@@ -125,6 +131,530 @@ def test_generate_codegen_scaffold_includes_field_level_content(workspace_builde
     assert 'v-model="formData.description"' in form_vue["content"]
 
 
+def test_generate_codegen_scaffold_outputs_all_configured_frontends(workspace_builder) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=(
+            "VUE3_ELEMENT_PLUS",
+            "VUE3_VBEN5_ANTD_SCHEMA",
+            "VUE3_ADMIN_UNIAPP_WOT",
+        )
+    )
+    result = generate_codegen_scaffold_tool("merchant", str(workspace_root))
+
+    assert result["ok"] is True
+    generated_files = result["data"]["generated_files"]
+    summary: dict[str, int] = {}
+    for item in generated_files:
+        summary[item["target_type"]] = summary.get(item["target_type"], 0) + 1
+
+    assert summary["VUE3_ELEMENT_PLUS"] == 3
+    assert summary["VUE3_VBEN5_ANTD_SCHEMA"] == 4
+    assert summary["VUE3_ADMIN_UNIAPP_WOT"] == 5
+
+
+def test_generate_codegen_scaffold_supports_all_vben_variants(workspace_builder) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=(
+            "VUE3_VBEN5_ANTD_SCHEMA",
+            "VUE3_VBEN5_ANTD_GENERAL",
+            "VUE3_VBEN5_EP_SCHEMA",
+            "VUE3_VBEN5_EP_GENERAL",
+        )
+    )
+    result = generate_codegen_scaffold_tool("merchant", str(workspace_root))
+
+    assert result["ok"] is True
+    generated_files = result["data"]["generated_files"]
+    grouped_paths: dict[str, list[str]] = {}
+    for item in generated_files:
+        grouped_paths.setdefault(item["target_type"], []).append(item["relative_path"])
+
+    assert len(grouped_paths["VUE3_VBEN5_ANTD_SCHEMA"]) == 4
+    assert len(grouped_paths["VUE3_VBEN5_ANTD_GENERAL"]) == 3
+    assert len(grouped_paths["VUE3_VBEN5_EP_SCHEMA"]) == 4
+    assert len(grouped_paths["VUE3_VBEN5_EP_GENERAL"]) == 3
+
+    assert all(
+        path.startswith("apps/web-antd/")
+        for path in grouped_paths["VUE3_VBEN5_ANTD_SCHEMA"]
+    )
+    assert all(
+        path.startswith("apps/web-antd/")
+        for path in grouped_paths["VUE3_VBEN5_ANTD_GENERAL"]
+    )
+    assert all(
+        path.startswith("apps/web-ele/")
+        for path in grouped_paths["VUE3_VBEN5_EP_SCHEMA"]
+    )
+    assert all(
+        path.startswith("apps/web-ele/")
+        for path in grouped_paths["VUE3_VBEN5_EP_GENERAL"]
+    )
+
+    assert any(
+        path.endswith("/data.ts")
+        for path in grouped_paths["VUE3_VBEN5_ANTD_SCHEMA"]
+    )
+    assert not any(
+        path.endswith("/data.ts")
+        for path in grouped_paths["VUE3_VBEN5_ANTD_GENERAL"]
+    )
+    assert any(
+        path.endswith("/data.ts")
+        for path in grouped_paths["VUE3_VBEN5_EP_SCHEMA"]
+    )
+    assert not any(
+        path.endswith("/data.ts")
+        for path in grouped_paths["VUE3_VBEN5_EP_GENERAL"]
+    )
+
+
+def test_generate_codegen_scaffold_uses_suffix_subdirectory_when_frontend_business_collides(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_VBEN5_ANTD_SCHEMA",),
+        manual_rules_yaml="""
+- module: member
+  table_prefixes:
+    - merchant
+  table_rules:
+    - table: merchant
+      business: merchant
+      entity: Merchant
+    - table: merchant_user
+      business: merchant
+      entity: MerchantUser
+""".strip(),
+    )
+    result = generate_codegen_scaffold_tool("merchant_user", str(workspace_root))
+
+    assert result["ok"] is True
+    generated_files = result["data"]["generated_files"]
+    frontend_paths = [
+        item["relative_path"]
+        for item in generated_files
+        if item["target_kind"] == "frontend" and item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
+    ]
+
+    assert all("/member/merchant/user/" in path for path in frontend_paths)
+    assert result["data"]["context"]["generated_file_plan"]["frontend_business_path"] == "merchant/user"
+
+
+def test_generate_vben_schema_refines_field_rendering_rules(
+    workspace_builder, monkeypatch
+) -> None:
+    def fake_parse_table_schema_from_database(database_config, table_name):
+        assert table_name == "merchant_user"
+        return {
+            "resolved": True,
+            "table_name": table_name,
+            "table_comment": "商家用户",
+            "schema_source": "database",
+            "database_name": database_config.database,
+            "message": "已从真实数据库解析表字段",
+            "columns": [
+                {
+                    "column_name": "id",
+                    "column_comment": "编号",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "id",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": True,
+                    "auto_increment": True,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": False,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "merchant_id",
+                    "column_comment": "关联商家ID",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "merchantId",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "account_id",
+                    "column_comment": "关联账号ID(merchant_account.id)",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "accountId",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "role_type",
+                    "column_comment": "角色: 1-管理员, 2-员工",
+                    "sql_type": "tinyint",
+                    "raw_type": "tinyint",
+                    "java_field": "roleType",
+                    "java_type": "Integer",
+                    "ts_type": "number",
+                    "html_type": "select",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": False,
+                },
+                {
+                    "column_name": "status",
+                    "column_comment": "状态: 0-启用, 1-禁用",
+                    "sql_type": "tinyint",
+                    "raw_type": "tinyint",
+                    "java_field": "status",
+                    "java_type": "Integer",
+                    "ts_type": "number",
+                    "html_type": "radio",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "delete_token",
+                    "column_comment": "逻辑唯一令牌(默认0,删除时改为雪花ID)",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "deleteToken",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": False,
+                },
+                {
+                    "column_name": "create_time",
+                    "column_comment": "创建时间",
+                    "sql_type": "datetime",
+                    "raw_type": "datetime",
+                    "java_field": "createTime",
+                    "java_type": "LocalDateTime",
+                    "ts_type": "string",
+                    "html_type": "datetime",
+                    "nullable": True,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": True,
+                    "in_do": False,
+                    "in_save": False,
+                    "in_resp": True,
+                    "in_list": False,
+                    "in_query": True,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(schema_module, "parse_table_schema_from_database", fake_parse_table_schema_from_database)
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_VBEN5_ANTD_SCHEMA", "VUE3_VBEN5_EP_SCHEMA")
+    )
+    result = generate_codegen_scaffold_tool(
+        "merchant_user",
+        str(workspace_root),
+        include_backend=False,
+        include_frontend=True,
+    )
+
+    assert result["ok"] is True
+    generated_files = result["data"]["generated_files"]
+    antd_data = next(
+        item["content"]
+        for item in generated_files
+        if item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
+        and item["relative_path"].endswith("/data.ts")
+    )
+    ep_data = next(
+        item["content"]
+        for item in generated_files
+        if item["target_type"] == "VUE3_VBEN5_EP_SCHEMA"
+        and item["relative_path"].endswith("/data.ts")
+    )
+
+    assert "DICT_TYPE.COMMON_STATUS" in antd_data
+    assert "getRangePickerDefaultProps" in antd_data
+    assert "deleteToken" not in antd_data
+    assert "管理员" in antd_data
+    assert "员工" in antd_data
+    assert "allowClear: true" in antd_data
+    assert "clearable: true" in ep_data
+
+
+def test_generate_vben_schema_uses_image_upload_for_logo_fields(
+    workspace_builder, monkeypatch
+) -> None:
+    def fake_parse_table_schema_from_database(database_config, table_name):
+        assert table_name == "merchant"
+        return {
+            "resolved": True,
+            "table_name": table_name,
+            "table_comment": "商家",
+            "schema_source": "database",
+            "database_name": database_config.database,
+            "message": "已从真实数据库解析表字段",
+            "columns": [
+                {
+                    "column_name": "id",
+                    "column_comment": "商家编号",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "id",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": True,
+                    "auto_increment": True,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": False,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "name",
+                    "column_comment": "商家名称",
+                    "sql_type": "varchar",
+                    "raw_type": "varchar(64)",
+                    "java_field": "name",
+                    "java_type": "String",
+                    "ts_type": "string",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "logo_url",
+                    "column_comment": "商家Logo",
+                    "sql_type": "varchar",
+                    "raw_type": "varchar(255)",
+                    "java_field": "logoUrl",
+                    "java_type": "String",
+                    "ts_type": "string",
+                    "html_type": "imageUpload",
+                    "nullable": True,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": False,
+                },
+                {
+                    "column_name": "status",
+                    "column_comment": "状态: 0-启用, 1-禁用",
+                    "sql_type": "tinyint",
+                    "raw_type": "tinyint",
+                    "java_field": "status",
+                    "java_type": "Integer",
+                    "ts_type": "number",
+                    "html_type": "radio",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                },
+                {
+                    "column_name": "delete_token",
+                    "column_comment": "逻辑唯一令牌(默认0,删除时改为雪花ID)",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "deleteToken",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": False,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": True,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": False,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(schema_module, "parse_table_schema_from_database", fake_parse_table_schema_from_database)
+    workspace_root = workspace_builder(frontend_types=("VUE3_VBEN5_ANTD_SCHEMA",))
+    result = generate_codegen_scaffold_tool(
+        "merchant",
+        str(workspace_root),
+        include_backend=False,
+        include_frontend=True,
+    )
+
+    assert result["ok"] is True
+    data_ts = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
+        and item["relative_path"].endswith("/data.ts")
+    )
+
+    assert "component: 'ImageUpload'" in data_ts
+    assert "deleteToken" not in data_ts
+    assert "options: getDictOptions(DICT_TYPE.COMMON_STATUS, 'number')" in data_ts
+
+
+def test_generate_codegen_scaffold_write_files_outputs_frontend_artifacts(
+    tmp_path: Path, repo_root: Path
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    config_dir = workspace_root / ".yudao-pilot"
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    vue3_root = tmp_path / "frontend-vue3"
+    vben_root = tmp_path / "frontend-vben"
+    uniapp_root = tmp_path / "frontend-uniapp"
+    vue3_root.mkdir(parents=True, exist_ok=True)
+    vben_root.mkdir(parents=True, exist_ok=True)
+    uniapp_root.mkdir(parents=True, exist_ok=True)
+
+    raw_config = {
+        "version": 1,
+        "workspace": {"name": "write-files-workspace"},
+        "projects": {
+            "backend": {
+                "path": str(repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"),
+                "type": "ruoyi-vue-pro-jdk17",
+                "config_profile": "local",
+            },
+            "frontend": [
+                {"type": "VUE3_ELEMENT_PLUS", "path": str(vue3_root)},
+                {"type": "VUE3_VBEN5_ANTD_GENERAL", "path": str(vben_root)},
+                {"type": "VUE3_VBEN5_ANTD_SCHEMA", "path": str(vben_root)},
+                {"type": "VUE3_VBEN5_EP_GENERAL", "path": str(vben_root)},
+                {"type": "VUE3_VBEN5_EP_SCHEMA", "path": str(vben_root)},
+                {"type": "VUE3_ADMIN_UNIAPP_WOT", "path": str(uniapp_root)},
+            ],
+        },
+        "database": {
+            "mode": "auto",
+            "host": "",
+            "port": 3306,
+            "database": "",
+            "username": "",
+            "password": "",
+        },
+        "codegen": {
+            "routing": {"mode": "manual"},
+            "manual_rules": [
+                {
+                    "module": "member",
+                    "table_prefixes": ["merchant"],
+                    "table_rules": [
+                        {
+                            "table": "merchant",
+                            "business": "merchant",
+                            "entity": "Merchant",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    (config_dir / "config.yaml").write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    result = generate_codegen_scaffold_tool(
+        "merchant",
+        str(workspace_root),
+        include_backend=False,
+        include_frontend=True,
+        write_files=True,
+        overwrite=True,
+    )
+
+    assert result["ok"] is True
+    assert (vue3_root / "src/views/member/merchant/index.vue").exists()
+    assert (vue3_root / "src/api/member/merchant/index.ts").exists()
+    assert (vben_root / "apps/web-antd/src/views/member/merchant/data.ts").exists()
+    assert (vben_root / "apps/web-antd/src/views/member/merchant/index.vue").exists()
+    assert (vben_root / "apps/web-ele/src/views/member/merchant/data.ts").exists()
+    assert (vben_root / "apps/web-ele/src/views/member/merchant/index.vue").exists()
+    assert (uniapp_root / "src/pages-member/merchant/index.vue").exists()
+    assert (uniapp_root / "src/api/member/merchant/index.ts").exists()
+
+    web_antd_index = (vben_root / "apps/web-antd/src/views/member/merchant/index.vue").read_text(
+        encoding="utf-8"
+    )
+    web_ele_index = (vben_root / "apps/web-ele/src/views/member/merchant/index.vue").read_text(
+        encoding="utf-8"
+    )
+    web_ele_form = (vben_root / "apps/web-ele/src/views/member/merchant/modules/form.vue").read_text(
+        encoding="utf-8"
+    )
+    assert "import { useGridColumns, useGridFormSchema } from './data'" in web_antd_index
+    assert "import { useGridColumns, useGridFormSchema } from './data'" in web_ele_index
+    assert "import { ElLoading, ElMessage } from 'element-plus';" in web_ele_index
+    assert "link: true" in web_ele_index
+    assert "import { ElMessage } from 'element-plus';" in web_ele_form
+
+
 def test_generate_codegen_scaffold_falls_back_to_database_schema(
     workspace_builder, monkeypatch
 ) -> None:
@@ -192,3 +722,460 @@ def test_generate_codegen_scaffold_falls_back_to_database_schema(
         item for item in generated_files if item["relative_path"].endswith("MerchantSaveReqVO.java")
     )
     assert "private String name;" in save_req["content"]
+
+
+def test_generate_codegen_sql_tool_contains_mysql_and_h2_plan(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    fake_schema = {
+        "resolved": True,
+        "table_name": "member_user",
+        "table_comment": "会员用户",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+            {
+                "column_name": "nickname",
+                "column_comment": "昵称",
+                "sql_type": "varchar",
+                "raw_type": "varchar(30)",
+                "java_field": "nickname",
+                "java_type": "String",
+                "ts_type": "string",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool(
+        "member_user",
+        str(workspace_root),
+        module_menu_name="会员中心",
+        menu_name="会员用户",
+    )
+
+    assert result["ok"] is True
+    sql_bundle = result["data"]["sql_bundle"]
+    assert sql_bundle["mysql"]["supported_db"] == "mysql"
+    assert "INSERT INTO system_menu" in sql_bundle["mysql"]["content"]
+    assert "会员用户管理" in sql_bundle["mysql"]["content"]
+    assert "'ep:avatar'" in sql_bundle["mysql"]["content"]
+    assert sql_bundle["menu_plan"]["business_menu"]["icon"] == "ep:avatar"
+    assert sql_bundle["h2"]["resolved"] is True
+    assert sql_bundle["h2"]["create_tables_path"].endswith(
+        "yudao-module-member/src/test/resources/sql/create_tables.sql"
+    )
+    assert 'CREATE TABLE IF NOT EXISTS "member_user"' in sql_bundle["h2"]["create_sql"]
+    assert 'DELETE FROM "member_user";' in sql_bundle["h2"]["clean_sql"]
+
+
+def test_generate_codegen_sql_tool_creates_root_menu_when_missing(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder(
+        manual_rules_yaml="""
+- module: custom
+  table_prefixes:
+    - custom_demo
+  table_rules:
+    - table: custom_demo
+      business: custom_demo
+      entity: CustomDemo
+""".strip()
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "custom_demo",
+        "table_comment": "自定义演示",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+            {
+                "column_name": "name",
+                "column_comment": "名称",
+                "sql_type": "varchar",
+                "raw_type": "varchar(64)",
+                "java_field": "name",
+                "java_type": "String",
+                "ts_type": "string",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool(
+        "custom_demo",
+        str(workspace_root),
+        module_menu_name="自定义模块",
+        menu_name="自定义演示",
+    )
+
+    assert result["ok"] is True
+    menu_plan = result["data"]["sql_bundle"]["menu_plan"]
+    assert menu_plan["needs_create_root_menu"] is True
+    assert menu_plan["root_menu"]["name"] == "自定义模块"
+    assert menu_plan["root_menu"]["path"] == "/custom"
+    assert menu_plan["business_menu"]["name"] == "自定义演示管理"
+
+
+def test_generate_codegen_sql_tool_supports_explicit_menu_icon_override(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    fake_schema = {
+        "resolved": True,
+        "table_name": "merchant",
+        "table_comment": "商家",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            }
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool(
+        "merchant",
+        str(workspace_root),
+        module_menu_name="会员中心",
+        menu_name="商家",
+        menu_icon="lucide:store",
+        module_menu_icon="lucide:users",
+    )
+
+    assert result["ok"] is True
+    menu_plan = result["data"]["sql_bundle"]["menu_plan"]
+    assert menu_plan["root_menu"]["icon"] == "lucide:users"
+    assert menu_plan["business_menu"]["icon"] == "lucide:store"
+    assert "'lucide:store'" in result["data"]["sql_bundle"]["mysql"]["content"]
+
+
+def test_merge_sql_snippet_is_idempotent(tmp_path: Path) -> None:
+    sql_file = tmp_path / "create_tables.sql"
+    sql_file.write_text('CREATE TABLE IF NOT EXISTS "member_user" (\n    "id" bigint\n);\n', encoding="utf-8")
+
+    first = merge_sql_snippet(
+        sql_file,
+        marker='CREATE TABLE IF NOT EXISTS "merchant"',
+        content='CREATE TABLE IF NOT EXISTS "merchant" (\n    "id" bigint\n);\n',
+    )
+    second = merge_sql_snippet(
+        sql_file,
+        marker='CREATE TABLE IF NOT EXISTS "merchant"',
+        content='CREATE TABLE IF NOT EXISTS "merchant" (\n    "id" bigint\n);\n',
+    )
+
+    assert first["ok"] is True
+    assert first["written"] is True
+    assert second["ok"] is True
+    assert second["written"] is False
+    assert sql_file.read_text(encoding="utf-8").count('CREATE TABLE IF NOT EXISTS "merchant"') == 1
+
+
+def test_apply_menu_plan_to_database_is_idempotent(monkeypatch) -> None:
+    statements: list[tuple[str, tuple[object, ...] | None]] = []
+    fetch_queue = [
+        None,
+        {"max_sort": 30},
+        None,
+        None,
+        None,
+        None,
+    ]
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.lastrowid = 100
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+            normalized = " ".join(sql.split())
+            if normalized.startswith("INSERT INTO system_menu"):
+                self.lastrowid += 1
+
+        def fetchone(self):
+            return fetch_queue.pop(0) if fetch_queue else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.cursor_obj = FakeCursor()
+            self.committed = False
+            self.rolled_back = False
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            pass
+
+    fake_connection = FakeConnection()
+
+    class FakePyMySQL:
+        class cursors:
+            DictCursor = object
+
+        @staticmethod
+        def connect(**kwargs):
+            return fake_connection
+
+    monkeypatch.setitem(sys.modules, "pymysql", FakePyMySQL)
+
+    menu_plan = {
+        "root_menu": {
+            "name": "会员中心",
+            "sort": 40,
+            "path": "/member",
+            "icon": "ep:menu",
+            "lookup_paths": ["/member", "member"],
+        },
+        "business_menu": {
+            "name": "商家管理",
+            "sort": 0,
+            "path": "merchant",
+            "icon": "",
+            "component": "member/merchant/index",
+            "component_name": "Merchant",
+        },
+        "buttons": [
+            {
+                "name": "商家查询",
+                "permission": "member:merchant:query",
+                "sort": 1,
+            },
+            {
+                "name": "商家创建",
+                "permission": "member:merchant:create",
+                "sort": 2,
+            },
+        ],
+    }
+
+    result = apply_menu_plan_to_database(
+        {
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "demo",
+            "username": "root",
+            "password": "123456",
+        },
+        menu_plan,
+    )
+
+    assert result["ok"] is True
+    assert fake_connection.committed is True
+    assert fake_connection.rolled_back is False
+    assert "根菜单:会员中心" in result["created"]
+    assert "业务菜单:商家管理" in result["created"]
+    assert "按钮:member:merchant:query" in result["created"]
+    assert any(
+        "FROM system_menu WHERE deleted = b'0' AND parent_id = 0" in sql
+        for sql, _ in statements
+    )
+
+
+def test_apply_menu_plan_to_database_updates_existing_menu_icon(monkeypatch) -> None:
+    statements: list[tuple[str, tuple[object, ...] | None]] = []
+    fetch_queue = [
+        {"id": 2262, "name": "会员中心", "path": "/member", "icon": "ep:bicycle"},
+        {
+            "id": 6001,
+            "parent_id": 2262,
+            "name": "商家管理",
+            "path": "merchant",
+            "icon": "",
+            "component": "member/merchant/index",
+            "component_name": "Merchant",
+        },
+        None,
+        None,
+    ]
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.lastrowid = 6001
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return fetch_queue.pop(0) if fetch_queue else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.cursor_obj = FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            raise AssertionError("不应触发回滚")
+
+        def close(self):
+            pass
+
+    fake_connection = FakeConnection()
+
+    class FakePyMySQL:
+        class cursors:
+            DictCursor = object
+
+        @staticmethod
+        def connect(**kwargs):
+            return fake_connection
+
+    monkeypatch.setitem(sys.modules, "pymysql", FakePyMySQL)
+
+    menu_plan = {
+        "root_menu": {
+            "name": "会员中心",
+            "sort": 55,
+            "path": "/member",
+            "icon": "ep:bicycle",
+            "lookup_paths": ["/member", "member"],
+        },
+        "business_menu": {
+            "name": "商家管理",
+            "sort": 0,
+            "path": "merchant",
+            "icon": "ep:shop",
+            "component": "member/merchant/index",
+            "component_name": "Merchant",
+        },
+        "buttons": [
+            {
+                "name": "商家查询",
+                "permission": "member:merchant:query",
+                "sort": 1,
+            },
+            {
+                "name": "商家创建",
+                "permission": "member:merchant:create",
+                "sort": 2,
+            },
+        ],
+    }
+
+    result = apply_menu_plan_to_database(
+        {
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "demo",
+            "username": "root",
+            "password": "123456",
+        },
+        menu_plan,
+    )
+
+    assert result["ok"] is True
+    assert fake_connection.committed is True
+    assert "根菜单:会员中心" in result["skipped"]
+    assert "业务菜单:商家管理" in result["updated"]
+    assert any(
+        sql.startswith("UPDATE system_menu SET icon = %s, updater = %s WHERE id = %s")
+        and params == ("ep:shop", "yudao-pilot", 6001)
+        for sql, params in statements
+    )

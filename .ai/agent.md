@@ -14,9 +14,10 @@ AI 项目执行 Agent 行为协议
 二、Agent 的唯一依据
 
 ✅ 必须读取
-•	`.ai/` 目录下已有的项目级协议文件（存在时），至少包括 agent.md / bootstrap.md / dev-standards.md
+•	`.ai/` 目录下已有的项目级协议文件（存在时），至少包括 agent.md / bootstrap.md / dev-standards.md / ai-integration.md
 •	.ai/bootstrap.md —— 项目初始化与编排规范
 •	.ai/dev-standards.md —— 项目开发规范（编码、工具类、枚举、数据库、安全性等）
+•	.ai/ai-integration.md —— AI 应用与 MCP 工具协作协议（调用顺序、SQL 生成、菜单图标、落库规则）
 •	.ai/work.json —— 模板，禁止修改
 •	work.json —— 当前项目状态与任务清单
 
@@ -30,7 +31,7 @@ AI 项目执行 Agent 行为协议
 三、Agent 启动流程（Cold Start）
 
 当你第一次接管项目，或会话重置时，必须执行以下流程：
-1.	先读取 `.ai/` 目录下已有的 Coding 协议文件（存在时），至少包括 `agent.md`、`.ai/bootstrap.md`、`.ai/dev-standards.md`
+1.	先读取 `.ai/` 目录下已有的 Coding 协议文件（存在时），至少包括 `agent.md`、`.ai/bootstrap.md`、`.ai/dev-standards.md`、`.ai/ai-integration.md`
 2.	读取 work.json
 3.	大致了解项目架构、主要代码模块与模块边界，再开始执行具体任务
 4.	理解以下信息：

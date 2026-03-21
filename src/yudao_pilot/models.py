@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field
 
 BackendType = Literal["ruoyi-vue-pro", "ruoyi-vue-pro-jdk17", "yudao-cloud"]
 FrontendType = Literal[
+    "VUE3_ELEMENT_PLUS",
+    "VUE3_VBEN5_ANTD_SCHEMA",
+    "VUE3_VBEN5_ANTD_GENERAL",
+    "VUE3_VBEN5_EP_SCHEMA",
+    "VUE3_VBEN5_EP_GENERAL",
+    "VUE3_ADMIN_UNIAPP_WOT",
+]
+FrontendProjectType = Literal[
     "yudao-ui-admin-vue3",
     "yudao-ui-admin-vben",
     "yudao-ui-admin-uniapp",
@@ -19,10 +27,27 @@ TargetKind = Literal["backend", "frontend"]
 
 SUPPORTED_BACKEND_TYPES = ("ruoyi-vue-pro", "ruoyi-vue-pro-jdk17", "yudao-cloud")
 SUPPORTED_FRONTEND_TYPES = (
+    "VUE3_ELEMENT_PLUS",
+    "VUE3_VBEN5_ANTD_SCHEMA",
+    "VUE3_VBEN5_ANTD_GENERAL",
+    "VUE3_VBEN5_EP_SCHEMA",
+    "VUE3_VBEN5_EP_GENERAL",
+    "VUE3_ADMIN_UNIAPP_WOT",
+)
+SUPPORTED_FRONTEND_PROJECT_TYPES = (
     "yudao-ui-admin-vue3",
     "yudao-ui-admin-vben",
     "yudao-ui-admin-uniapp",
 )
+
+FRONTEND_CODEGEN_TYPE_TO_PROJECT_TYPE: dict[str, FrontendProjectType] = {
+    "VUE3_ELEMENT_PLUS": "yudao-ui-admin-vue3",
+    "VUE3_VBEN5_ANTD_SCHEMA": "yudao-ui-admin-vben",
+    "VUE3_VBEN5_ANTD_GENERAL": "yudao-ui-admin-vben",
+    "VUE3_VBEN5_EP_SCHEMA": "yudao-ui-admin-vben",
+    "VUE3_VBEN5_EP_GENERAL": "yudao-ui-admin-vben",
+    "VUE3_ADMIN_UNIAPP_WOT": "yudao-ui-admin-uniapp",
+}
 
 
 class WorkspaceConfigFile(BaseModel):

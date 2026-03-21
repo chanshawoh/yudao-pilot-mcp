@@ -16,9 +16,12 @@ if str(SRC_ROOT) not in sys.path:
 
 
 FRONTEND_PATHS = {
-    "yudao-ui-admin-vue3": "yudao-ui-admin-vue3",
-    "yudao-ui-admin-vben": "yudao-ui-admin-vben",
-    "yudao-ui-admin-uniapp": "yudao-ui-admin-uniapp",
+    "VUE3_ELEMENT_PLUS": "yudao-ui-admin-vue3",
+    "VUE3_VBEN5_ANTD_SCHEMA": "yudao-ui-admin-vben",
+    "VUE3_VBEN5_ANTD_GENERAL": "yudao-ui-admin-vben",
+    "VUE3_VBEN5_EP_SCHEMA": "yudao-ui-admin-vben",
+    "VUE3_VBEN5_EP_GENERAL": "yudao-ui-admin-vben",
+    "VUE3_ADMIN_UNIAPP_WOT": "yudao-ui-admin-uniapp",
 }
 
 
@@ -33,7 +36,7 @@ def workspace_builder(tmp_path: Path, repo_root: Path):
         *,
         backend_path: str = "yudao-projects/ruoyi-vue-pro-jdk17",
         backend_type: str = "ruoyi-vue-pro-jdk17",
-        frontend_types: tuple[str, ...] = ("yudao-ui-admin-vue3",),
+        frontend_types: tuple[str, ...] = ("VUE3_ELEMENT_PLUS",),
         manual_rules_yaml: str | None = None,
     ) -> Path:
         workspace_root = tmp_path / "workspace"

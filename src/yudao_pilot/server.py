@@ -18,10 +18,12 @@ from .config import (
     load_workspace_config_file,
 )
 from .database import resolve_database_config
+from .database import apply_menu_plan_to_database
 from .models import GeneratedFile, TableResolution
 from .inspector import inspect_project_path, validate_workspace_projects
 from .schema import inspect_table_schema
 from .scaffold import generate_scaffold_files
+from .sql_codegen import build_codegen_sql_bundle, write_codegen_sql_bundle
 from .writer import write_generated_files
 
 
@@ -376,6 +378,86 @@ def write_mysql_migration_tool(
     if result["ok"]:
         return success_response("SQL 迁移文件写入成功", result)
     return error_response("write_mysql_migration_failed", result["message"], result)
+
+
+@mcp.tool
+def generate_codegen_sql_tool(
+    table_name: str,
+    workspace_root: str | None = None,
+    module_name: str | None = None,
+    business_name: str | None = None,
+    entity_name: str | None = None,
+    menu_name: str | None = None,
+    module_menu_name: str | None = None,
+    menu_icon: str | None = None,
+    module_menu_icon: str | None = None,
+    parent_menu_name: str | None = None,
+    parent_menu_id: int | None = None,
+    write_files: bool = False,
+    overwrite: bool = False,
+    apply_menu_to_database: bool = False,
+) -> dict[str, Any]:
+    """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件并执行菜单数据。"""
+    loaded = load_config_or_error(workspace_root)
+    if isinstance(loaded, dict):
+        return loaded
+    root, config = loaded
+    resolution = infer_table_resolution(table_name, config)
+    context = build_codegen_context(
+        root,
+        config,
+        table_name,
+        module_name=module_name or resolution.module,
+        business_name=business_name or resolution.business,
+        entity_name=entity_name or resolution.entity,
+        menu_name=menu_name,
+        parent_menu_name=parent_menu_name,
+        parent_menu_id=parent_menu_id,
+    )
+    sql_bundle = build_codegen_sql_bundle(
+        context,
+        module_menu_name=module_menu_name,
+        menu_name=menu_name,
+        menu_icon=menu_icon,
+        module_menu_icon=module_menu_icon,
+    )
+    result: dict[str, Any] = {
+        "workspace_root": str(root),
+        "table_name": table_name,
+        "resolved_from_config": resolution.model_dump(),
+        "context": context,
+        "sql_bundle": sql_bundle,
+    }
+    if not sql_bundle.get("ok"):
+        return error_response("generate_codegen_sql_failed", sql_bundle["message"], result)
+
+    if write_files:
+        write_result = write_codegen_sql_bundle(sql_bundle, overwrite=overwrite)
+        write_result["workspace_root"] = str(root)
+        result["write_result"] = write_result
+        if not write_result["ok"]:
+            return error_response(
+                "generate_codegen_sql_write_failed",
+                "SQL 已生成，但写入文件时存在失败项",
+                result,
+            )
+
+    if apply_menu_to_database:
+        database_result = resolve_database_config(root, config)
+        result["database"] = database_result
+        if not database_result.get("ok"):
+            return error_response(
+                "database_config_unresolved",
+                database_result["message"],
+                result,
+            )
+        apply_result = apply_menu_plan_to_database(
+            database_result["database"],
+            sql_bundle["menu_plan"],
+        )
+        result["apply_result"] = apply_result
+
+    return success_response("代码生成 SQL 已准备完成", result)
 
 
 def infer_table_resolution(table_name: str, config: WorkspaceConfig) -> TableResolution:

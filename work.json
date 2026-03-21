@@ -13,7 +13,7 @@
     "created_at": "2026-03-20"
   },
   "global_status": "in_progress",
-  "current_task_id": "T-010",
+  "current_task_id": "T-011",
   "tasks": [
     {
       "id": "T-001",
@@ -163,12 +163,26 @@
       "id": "T-010",
       "name": "真实生成产物收口与前端写入策略整理",
       "type": "analysis",
-      "status": "pending",
+      "status": "done",
       "depends_on": [
         "T-009"
       ],
+      "outputs": [
+        "docs/frontend-output-matrix.md",
+        "tests/test_mcp_tools.py"
+      ],
+      "notes": "已确认同一工作区配置多个前端类型时，会分别生成对应前端产物；并补充前端产物矩阵文档与自动化测试。"
+    },
+    {
+      "id": "T-011",
+      "name": "前端真实落盘清理与覆盖策略收口",
+      "type": "coding",
+      "status": "pending",
+      "depends_on": [
+        "T-010"
+      ],
       "outputs": [],
-      "notes": "下一步建议梳理前端已写入测试产物、确定是否需要清理旧文件并收口 overwrite 策略。"
+      "notes": "下一步可继续处理前端历史测试产物清理、overwrite 策略细化，以及是否需要菜单/路由注册补全。"
     }
   ],
   "task_statuses": {
@@ -216,6 +230,7 @@
     "README.md",
     "docs/product.md",
     "docs/roadmap.md",
+    "docs/frontend-output-matrix.md",
     ".yudao-pilot/config.yaml",
     "src/yudao_pilot/server.py",
     "src/yudao_pilot/error_codes.py",
@@ -225,7 +240,7 @@
     "第一版不做数据库副本、DDL/DML 同步合并。",
     "项目默认使用中文文档与中文说明。",
     "后端参考实现优先采用 ruoyi-vue-pro-jdk17。",
-    "前端仅支持 yudao-ui-admin-vue3、yudao-ui-admin-vben、yudao-ui-admin-uniapp。",
+    "前端配置已切换为 codegen 枚举类型，支持 VUE3_ELEMENT_PLUS、4 种 Vben 模板与 VUE3_ADMIN_UNIAPP_WOT。",
     "数据库配置按字段优先使用 config.yaml，留空字段再回退到后端本地环境配置。",
     "后端真实写入必须保持 yudao 原有模块平铺结构。",
     "错误码生成在写入阶段自动并入 ErrorCodeConstants.java，不保留 _手动操作.java。"

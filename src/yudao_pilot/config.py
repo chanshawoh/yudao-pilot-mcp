@@ -104,14 +104,19 @@ def default_config_template() -> str:
             config_profile: local # 读取后端本地配置时使用的环境名
 
           frontend:
-            - type: yudao-ui-admin-vue3 # 可选：yudao-ui-admin-vue3、yudao-ui-admin-vben、yudao-ui-admin-uniapp
+            - type: VUE3_ELEMENT_PLUS # 可选：VUE3_ELEMENT_PLUS、VUE3_VBEN5_ANTD_SCHEMA、VUE3_VBEN5_ANTD_GENERAL、VUE3_VBEN5_EP_SCHEMA、VUE3_VBEN5_EP_GENERAL、VUE3_ADMIN_UNIAPP_WOT
               path: ../yudao-ui-admin-vue3
-            - type: yudao-ui-admin-uniapp
+            - type: VUE3_VBEN5_ANTD_SCHEMA
+              path: ../yudao-ui-admin-vben
+            - type: VUE3_VBEN5_EP_GENERAL
+              path: ../yudao-ui-admin-vben
+            - type: VUE3_ADMIN_UNIAPP_WOT
               path: ../yudao-ui-admin-uniapp
             # 约束：
             # 1. backend 只能有一个
             # 2. frontend 中 type 不能重复，重复直接报错
-            # 3. path 必须存在，且识别结果必须和 type 匹配，否则报错
+            # 3. path 必须存在，且识别结果必须和 type 对应的真实前端项目匹配，否则报错
+            # 4. 同一个 yudao-ui-admin-vben 路径可以配置多个不同枚举，分别产出 web-antd / web-ele 的代码
 
         database:
           mode: auto # auto | manual

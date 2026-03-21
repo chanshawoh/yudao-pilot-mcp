@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from textwrap import dedent
 from typing import Any
 
@@ -464,8 +465,21 @@ def render_frontend_api(
     business_name = context["business_name"]
     entity_name = context["entity_name"]
     lower_name = lower_camel(entity_name)
+    frontend_business_path = (
+        frontend_plan.get("frontend_business_path")
+        or context.get("generated_file_plan", {}).get("frontend_business_path")
+        or business_name
+    )
     ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
-    if project_type == "yudao-ui-admin-uniapp":
+    if is_vben_codegen_type(project_type):
+        return render_vben_api_file(
+            module_name=module_name,
+            frontend_business_path=frontend_business_path,
+            entity_name=entity_name,
+            entity_label=resolve_frontend_entity_label(context),
+            fields=get_resp_fields(context),
+        )
+    if is_uniapp_codegen_type(project_type):
         return dedent(
             f"""\
             import request from '@/config/axios'
@@ -531,12 +545,70 @@ def render_frontend_api(
     )
 
 
+def render_vben_api_file(
+    *,
+    module_name: str,
+    frontend_business_path: str,
+    entity_name: str,
+    entity_label: str,
+    fields: list[dict[str, Any]],
+) -> str:
+    namespace = build_vben_api_namespace(entity_name)
+    model_name = entity_name
+    base_url = f"/{module_name}/{frontend_business_path.replace('/', '_')}"
+    interface_body = render_vben_api_interface_body(fields)
+    return (
+        "\n".join(
+            [
+                "import type { PageParam, PageResult } from '@vben/request';",
+                "",
+                "import { requestClient } from '#/api/request';",
+                "",
+                f"export namespace {namespace} {{",
+                f"  /** {entity_label}信息 */",
+                f"  export interface {model_name} {{",
+                indent_block(interface_body, "    "),
+                "  }",
+                "}",
+                "",
+                f"/** 查询{entity_label}列表 */",
+                f"export function get{entity_name}Page(params: PageParam) {{",
+                f"  return requestClient.get<PageResult<{namespace}.{model_name}>>('{base_url}/page', {{",
+                "    params,",
+                "  });",
+                "}",
+                "",
+                f"/** 查询{entity_label}详情 */",
+                f"export function get{entity_name}(id: number) {{",
+                f"  return requestClient.get<{namespace}.{model_name}>(`{base_url}/get?id=${{id}}`);",
+                "}",
+                "",
+                f"/** 新增{entity_label} */",
+                f"export function create{entity_name}(data: {namespace}.{model_name}) {{",
+                f"  return requestClient.post('{base_url}/create', data);",
+                "}",
+                "",
+                f"/** 修改{entity_label} */",
+                f"export function update{entity_name}(data: {namespace}.{model_name}) {{",
+                f"  return requestClient.put('{base_url}/update', data);",
+                "}",
+                "",
+                f"/** 删除{entity_label} */",
+                f"export function delete{entity_name}(id: number) {{",
+                f"  return requestClient.delete(`{base_url}/delete?id=${{id}}`);",
+                "}",
+            ]
+        ).strip()
+        + "\n"
+    )
+
+
 def render_frontend_index(
     relative_path: str, frontend_plan: dict[str, Any], context: dict[str, Any]
 ) -> str:
-    if frontend_plan["project_type"] == "yudao-ui-admin-uniapp":
+    if is_uniapp_codegen_type(frontend_plan["project_type"]):
         return render_uniapp_index(relative_path, context)
-    if frontend_plan["project_type"] == "yudao-ui-admin-vben":
+    if is_vben_codegen_type(frontend_plan["project_type"]):
         return render_vben_index(relative_path, frontend_plan, context)
     return render_vue3_index(relative_path, context)
 
@@ -544,7 +616,7 @@ def render_frontend_index(
 def render_vue3_index(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
     simple_class_name = context["generated_file_plan"]["simple_class_name"]
-    list_fields = get_list_fields(context)
+    list_fields = get_frontend_list_fields(context)
     column_lines = "\n".join(render_vue3_table_column(field) for field in list_fields)
     ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
     return dedent(
@@ -584,7 +656,7 @@ const list = ref<{entity_name}VO[]>([])
 
 def render_vue3_form(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
-    save_fields = get_save_fields(context)
+    save_fields = get_frontend_save_fields(context)
     form_items = "\n".join(render_vue3_form_item(field) for field in save_fields)
     form_state = ",\n".join(render_ts_form_state_line(field) for field in save_fields)
     return dedent(
@@ -633,85 +705,395 @@ def render_vben_index(
     relative_path: str, frontend_plan: dict[str, Any], context: dict[str, Any]
 ) -> str:
     entity_name = context["entity_name"]
+    entity_label = resolve_frontend_entity_label(context)
     uses_schema = frontend_plan["default_front_type"] in {40, 50}
-    imports = "import { columns, searchFormSchema } from './data'\n" if uses_schema else ""
-    extra = (
-        "const tableColumns = columns\nconst formSchema = searchFormSchema\n"
-        if uses_schema
-        else "const tableColumns = []\nconst formSchema = []\n"
-    )
-    return dedent(
-        f"""\
-        <script setup lang="ts">
-        {imports}import FormModal from './modules/form.vue'
+    api_import_path = build_frontend_api_import_path(frontend_plan, context)
+    api_namespace = build_vben_api_namespace(entity_name)
+    uses_element_plus = is_vben_ele_codegen_type(frontend_plan["project_type"])
+    grid_columns_expr = "useGridColumns()" if uses_schema else "gridColumns"
+    grid_form_expr = "useGridFormSchema()" if uses_schema else "gridFormSchema"
+    schema_import = "import { useGridColumns, useGridFormSchema } from './data';" if uses_schema else ""
+    inline_grid_source = ""
+    if not uses_schema:
+        inline_grid_source = dedent(
+            f"""\
+            const gridFormSchema = [
+            {indent_block(render_vben_grid_form_schema_fields(get_frontend_query_fields(context), frontend_plan), "  ")}
+            ];
 
-        {extra}
-        // TODO Yudao Pilot: 接入 Vben Table、权限点 `{context["permission_prefix"]}` 和真实字段定义
-        </script>
-
-        <template>
-          <div class="p-4">
-            <div class="mb-4 text-sm text-gray-500">
-              {entity_name} 首版页面骨架已生成，后续请继续补齐字段和交互。
-            </div>
-            <FormModal />
-            <pre>{{{{ tableColumns }}}}</pre>
-            <pre>{{{{ formSchema }}}}</pre>
-          </div>
-        </template>
-        """
+            const gridColumns: VxeTableGridOptions<{api_namespace}.{entity_name}>['columns'] = [
+            {indent_block(render_vben_grid_columns(get_frontend_list_fields(context)), "  ")}
+            ];
+            """
+        ).strip() + "\n\n"
+    feedback_import = (
+        "import { ElLoading, ElMessage } from 'element-plus';"
+        if uses_element_plus
+        else "import { message } from 'ant-design-vue';"
     )
+    delete_handler = (
+        dedent(
+            f"""\
+            async function handleDelete(row: {api_namespace}.{entity_name}) {{
+              const loadingInstance = ElLoading.service({{
+                text: $t('ui.actionMessage.deleting', [row.id]),
+              }});
+              try {{
+                await delete{entity_name}(row.id!);
+                ElMessage.success($t('ui.actionMessage.deleteSuccess', [row.id]));
+                handleRefresh();
+              }} finally {{
+                loadingInstance.close();
+              }}
+            }}
+            """
+        ).strip()
+        if uses_element_plus
+        else dedent(
+            f"""\
+            async function handleDelete(row: {api_namespace}.{entity_name}) {{
+              const hideLoading = message.loading({{
+                content: $t('ui.actionMessage.deleting', [row.id]),
+                duration: 0,
+              }});
+              try {{
+                await delete{entity_name}(row.id!);
+                message.success($t('ui.actionMessage.deleteSuccess', [row.id]));
+                handleRefresh();
+              }} finally {{
+                hideLoading();
+              }}
+            }}
+            """
+        ).strip()
+    )
+    edit_action_lines = [
+        "{",
+        "  label: $t('common.edit'),",
+        "  type: 'primary'," if uses_element_plus else "  type: 'link',",
+        "  link: true," if uses_element_plus else None,
+        "  icon: ACTION_ICON.EDIT,",
+        f"  auth: ['{context['permission_prefix']}:update'],",
+        "  onClick: handleEdit.bind(null, row),",
+        "},",
+    ]
+    delete_action_lines = [
+        "{",
+        "  label: $t('common.delete'),",
+        "  type: 'danger'," if uses_element_plus else "  type: 'link',",
+        "  link: true," if uses_element_plus else "  danger: true,",
+        "  icon: ACTION_ICON.DELETE,",
+        f"  auth: ['{context['permission_prefix']}:delete'],",
+        "  popConfirm: {",
+        "    title: $t('ui.actionMessage.deleteConfirm', [row.id]),",
+        "    confirm: handleDelete.bind(null, row),",
+        "  },",
+        "}",
+    ]
+    lines = [
+        '<script lang="ts" setup>',
+        "import type { VxeTableGridOptions } from '#/adapter/vxe-table';",
+        f"import type {{ {api_namespace} }} from '{api_import_path}';",
+        "",
+        "import { Page, useVbenModal } from '@vben/common-ui';",
+        feedback_import,
+        "",
+        "import { ACTION_ICON, TableAction, useVbenVxeGrid } from '#/adapter/vxe-table';",
+        f"import {{ delete{entity_name}, get{entity_name}Page }} from '{api_import_path}';",
+        "import { $t } from '#/locales';",
+        "",
+    ]
+    if schema_import:
+        lines.append(schema_import)
+    lines.extend(
+        [
+            "import Form from './modules/form.vue';",
+            "",
+        ]
+    )
+    if inline_grid_source:
+        lines.extend(inline_grid_source.strip().splitlines())
+        lines.append("")
+    lines.extend(
+        [
+            "const [FormModal, formModalApi] = useVbenModal({",
+            "  connectedComponent: Form,",
+            "  destroyOnClose: true,",
+            "});",
+            "",
+            "function handleRefresh() {",
+            "  gridApi.query();",
+            "}",
+            "",
+            "function handleCreate() {",
+            "  formModalApi.setData(null).open();",
+            "}",
+            "",
+            f"function handleEdit(row: {api_namespace}.{entity_name}) {{",
+            "  formModalApi.setData(row).open();",
+            "}",
+            "",
+        ]
+    )
+    lines.extend(delete_handler.splitlines())
+    lines.extend(
+        [
+            "",
+            "const [Grid, gridApi] = useVbenVxeGrid({",
+            "  formOptions: {",
+            f"    schema: {grid_form_expr},",
+            "  },",
+            "  gridOptions: {",
+            f"    columns: {grid_columns_expr},",
+            "    height: 'auto',",
+            "    keepSource: true,",
+            "    proxyConfig: {",
+            "      ajax: {",
+            "        query: async ({ page }, formValues) => {",
+            f"          return await get{entity_name}Page({{",
+            "            pageNo: page.currentPage,",
+            "            pageSize: page.pageSize,",
+            "            ...formValues,",
+            "          });",
+            "        },",
+            "      },",
+            "    },",
+            "    rowConfig: {",
+            "      keyField: 'id',",
+            "      isHover: true,",
+            "    },",
+            "    toolbarConfig: {",
+            "      refresh: true,",
+            "      search: true,",
+            "    },",
+            f"  }} as VxeTableGridOptions<{api_namespace}.{entity_name}>,",
+            "});",
+            "</script>",
+            "",
+            "<template>",
+            "  <Page auto-content-height>",
+            "    <FormModal @success=\"handleRefresh\" />",
+            f"    <Grid table-title=\"{entity_label}列表\">",
+            "      <template #toolbar-tools>",
+            "        <TableAction",
+            "          :actions=\"[",
+            f"            {{ label: $t('ui.actionTitle.create', ['{entity_label}']), type: 'primary', icon: ACTION_ICON.ADD, auth: ['{context['permission_prefix']}:create'], onClick: handleCreate }},",
+            "          ]\"",
+            "        />",
+            "      </template>",
+            "      <template #actions=\"{ row }\">",
+            "        <TableAction",
+            "          :actions=\"[",
+            indent_block("\n".join([line for line in edit_action_lines if line]), "            "),
+            indent_block("\n".join([line for line in delete_action_lines if line]), "            "),
+            "          ]\"",
+            "        />",
+            "      </template>",
+            "    </Grid>",
+            "  </Page>",
+            "</template>",
+        ]
+    )
+    return "\n".join(lines).strip() + "\n"
 
 
 def render_vben_form(
     relative_path: str, frontend_plan: dict[str, Any], context: dict[str, Any]
 ) -> str:
     entity_name = context["entity_name"]
-    save_fields = get_save_fields(context)
-    preview_fields = "\n".join(f"      <li>{field['column_comment']}：{field['java_field']}</li>" for field in save_fields[:8])
-    return dedent(
-        f"""\
-        <script setup lang="ts">
-        // TODO Yudao Pilot: 根据字段定义补齐 Vben 表单组件与校验
-        </script>
-
-        <template>
-          <div class="rounded-lg border border-dashed p-4">
-            <div class="mb-3 font-medium">{entity_name} 表单骨架</div>
-            <ul class="list-disc pl-5 text-sm text-gray-500">
-        {preview_fields}
-            </ul>
-          </div>
-        </template>
-        """
+    entity_label = resolve_frontend_entity_label(context)
+    api_import_path = build_frontend_api_import_path(frontend_plan, context)
+    api_namespace = build_vben_api_namespace(entity_name)
+    uses_schema = frontend_plan["default_front_type"] in {40, 50}
+    uses_element_plus = is_vben_ele_codegen_type(frontend_plan["project_type"])
+    form_schema_source = ""
+    schema_import = "import { useFormSchema } from '../data';" if uses_schema else ""
+    schema_expr = "useFormSchema()" if uses_schema else "formSchema"
+    if not uses_schema:
+        form_schema_source = dedent(
+            f"""\
+            const formSchema = [
+            {indent_block(render_vben_form_schema_fields(get_frontend_save_fields(context), frontend_plan), "  ")}
+            ];
+            """
+        ).strip() + "\n\n"
+    feedback_import = (
+        "import { ElMessage } from 'element-plus';"
+        if uses_element_plus
+        else "import { message } from 'ant-design-vue';"
     )
+    success_feedback = (
+        "ElMessage.success($t('ui.actionMessage.operationSuccess'));"
+        if uses_element_plus
+        else "message.success($t('ui.actionMessage.operationSuccess'));"
+    )
+    lines = [
+        '<script lang="ts" setup>',
+        f"import type {{ {api_namespace} }} from '{api_import_path}';",
+        "",
+        "import { computed, ref } from 'vue';",
+        "",
+        "import { useVbenModal } from '@vben/common-ui';",
+        feedback_import,
+        "",
+        "import { useVbenForm } from '#/adapter/form';",
+        f"import {{ create{entity_name}, get{entity_name}, update{entity_name} }} from '{api_import_path}';",
+        "import { $t } from '#/locales';",
+        "",
+    ]
+    if schema_import:
+        lines.append(schema_import)
+        lines.append("")
+    if form_schema_source:
+        lines.extend(form_schema_source.strip().splitlines())
+        lines.append("")
+    lines.extend(
+        [
+            "const emit = defineEmits(['success']);",
+            f"const formData = ref<{api_namespace}.{entity_name}>();",
+            "const getTitle = computed(() => {",
+            "  return formData.value?.id",
+            f"    ? $t('ui.actionTitle.edit', ['{entity_label}'])",
+            f"    : $t('ui.actionTitle.create', ['{entity_label}']);",
+            "});",
+            "",
+            "const [Form, formApi] = useVbenForm({",
+            "  commonConfig: {",
+            "    componentProps: {",
+            "      class: 'w-full',",
+            "    },",
+            "    formItemClass: 'col-span-2',",
+            "    labelWidth: 100,",
+            "  },",
+            "  layout: 'horizontal',",
+            f"  schema: {schema_expr},",
+            "  showDefaultActions: false,",
+            "});",
+            "",
+            "const [Modal, modalApi] = useVbenModal({",
+            "  async onConfirm() {",
+            "    const { valid } = await formApi.validate();",
+            "    if (!valid) {",
+            "      return;",
+            "    }",
+            "    modalApi.lock();",
+            f"    const data = (await formApi.getValues()) as {api_namespace}.{entity_name};",
+            "    try {",
+            f"      await (formData.value?.id ? update{entity_name}(data) : create{entity_name}(data));",
+            "      await modalApi.close();",
+            "      emit('success');",
+            f"      {success_feedback}",
+            "    } finally {",
+            "      modalApi.unlock();",
+            "    }",
+            "  },",
+            "  async onOpenChange(isOpen: boolean) {",
+            "    if (!isOpen) {",
+            "      formData.value = undefined;",
+            "      return;",
+            "    }",
+            f"    const data = modalApi.getData<{api_namespace}.{entity_name}>();",
+            "    if (!data || !data.id) {",
+            "      return;",
+            "    }",
+            "    modalApi.lock();",
+            "    try {",
+            f"      formData.value = await get{entity_name}(data.id);",
+            "      await formApi.setValues(formData.value);",
+            "    } finally {",
+            "      modalApi.unlock();",
+            "    }",
+            "  },",
+            "});",
+            "</script>",
+            "",
+            "<template>",
+            '  <Modal :title="getTitle" class="w-1/2">',
+            '    <Form class="mx-4" />',
+            "  </Modal>",
+            "</template>",
+        ]
+    )
+    return "\n".join(lines).strip() + "\n"
 
 
 def render_vben_data(
     relative_path: str, frontend_plan: dict[str, Any], context: dict[str, Any]
 ) -> str:
-    list_fields = get_list_fields(context)
-    query_fields = get_query_fields(context)
-    columns = ",\n".join(render_vben_column(field) for field in list_fields)
-    search_schema = ",\n".join(render_vben_search_field(field) for field in query_fields)
-    return dedent(
-        f"""\
-        export const columns = [
-        {columns}
-        ]
-
-        export const searchFormSchema = [
-        {search_schema}
-        ]
-
-        // TODO Yudao Pilot: 根据字典、状态枚举和权限进一步补齐 schema
-        """
+    entity_name = context["entity_name"]
+    api_import_path = build_frontend_api_import_path(frontend_plan, context)
+    api_namespace = build_vben_api_namespace(entity_name)
+    form_fields = get_frontend_save_fields(context)
+    query_fields = get_frontend_query_fields(context)
+    list_fields = get_frontend_list_fields(context)
+    dict_types = collect_vben_dict_types(form_fields + query_fields + list_fields)
+    needs_common_status_enum = any(
+        should_use_vben_common_status_default(field) for field in form_fields
+    )
+    needs_dict_options = bool(dict_types)
+    needs_range_picker_default_props = any(
+        is_vben_range_picker_field(field) for field in query_fields
+    )
+    import_lines = [
+        "import type { VbenFormSchema } from '#/adapter/form';",
+        "import type { VxeTableGridOptions } from '#/adapter/vxe-table';",
+        f"import type {{ {api_namespace} }} from '{api_import_path}';",
+    ]
+    constant_names: list[str] = []
+    if needs_common_status_enum:
+        constant_names.append("CommonStatusEnum")
+    if needs_dict_options:
+        constant_names.append("DICT_TYPE")
+    if constant_names:
+        import_lines.append("")
+        import_lines.append(f"import {{ {', '.join(constant_names)} }} from '@vben/constants';")
+    if needs_dict_options:
+        import_lines.append("import { getDictOptions } from '@vben/hooks';")
+    extra_imports: list[str] = []
+    if needs_common_status_enum:
+        extra_imports.append("import { z } from '#/adapter/form';")
+    if needs_range_picker_default_props:
+        extra_imports.append("import { getRangePickerDefaultProps } from '#/utils';")
+    if extra_imports:
+        import_lines.append("")
+        import_lines.extend(extra_imports)
+    return (
+        "\n".join(
+            import_lines
+            + [
+                "",
+                "/** 新增/修改的表单 */",
+                "export function useFormSchema(): VbenFormSchema[] {",
+                "  return [",
+                indent_block(render_vben_form_schema_fields(form_fields, frontend_plan), "    "),
+                "  ];",
+                "}",
+                "",
+                "/** 列表的搜索表单 */",
+                "export function useGridFormSchema(): VbenFormSchema[] {",
+                "  return [",
+                indent_block(render_vben_grid_form_schema_fields(query_fields, frontend_plan), "    "),
+                "  ];",
+                "}",
+                "",
+                "/** 列表的字段 */",
+                f"export function useGridColumns(): VxeTableGridOptions<{api_namespace}.{entity_name}>['columns'] {{",
+                "  return [",
+                indent_block(render_vben_grid_columns(list_fields), "    "),
+                "  ];",
+                "}",
+            ]
+        ).strip()
+        + "\n"
     )
 
 
 def render_uniapp_index(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
-    preview_field = next((field for field in get_list_fields(context) if field["java_field"] != "id"), None)
+    preview_field = next(
+        (field for field in get_frontend_list_fields(context) if field["java_field"] != "id"),
+        None,
+    )
     preview_expr = f"item.{preview_field['java_field']}" if preview_field else "item.id"
     ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
     return dedent(
@@ -751,7 +1133,7 @@ def render_uniapp_index(relative_path: str, context: dict[str, Any]) -> str:
 
 
 def render_uniapp_search_form(relative_path: str, context: dict[str, Any]) -> str:
-    query_fields = get_query_fields(context)
+    query_fields = get_frontend_query_fields(context)
     input_fields = "\n".join(render_uniapp_search_item(field) for field in query_fields[:3]) or '    <input class="search-input" placeholder="请输入关键字" />'
     return dedent(
         f"""\
@@ -771,7 +1153,7 @@ def render_uniapp_search_form(relative_path: str, context: dict[str, Any]) -> st
 
 def render_uniapp_form(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
-    save_fields = get_save_fields(context)
+    save_fields = get_frontend_save_fields(context)
     form_items = "\n".join(render_uniapp_form_item(field) for field in save_fields[:6]) or '    <textarea class="textarea" placeholder="请输入备注" />'
     return dedent(
         f"""\
@@ -844,6 +1226,26 @@ def resolve_resource_package(backend_type: str) -> str:
 
 def lower_camel(value: str) -> str:
     return value[:1].lower() + value[1:] if value else value
+
+
+def is_vben_codegen_type(project_type: str) -> bool:
+    return project_type in {
+        "VUE3_VBEN5_ANTD_SCHEMA",
+        "VUE3_VBEN5_ANTD_GENERAL",
+        "VUE3_VBEN5_EP_SCHEMA",
+        "VUE3_VBEN5_EP_GENERAL",
+    }
+
+
+def is_vben_ele_codegen_type(project_type: str) -> bool:
+    return project_type in {
+        "VUE3_VBEN5_EP_SCHEMA",
+        "VUE3_VBEN5_EP_GENERAL",
+    }
+
+
+def is_uniapp_codegen_type(project_type: str) -> bool:
+    return project_type == "VUE3_ADMIN_UNIAPP_WOT"
 
 
 def resolve_error_code_section_title(context: dict[str, Any]) -> str:
@@ -921,6 +1323,20 @@ def get_query_fields(context: dict[str, Any]) -> list[dict[str, Any]]:
     return fields[:6] if fields else []
 
 
+def get_frontend_save_fields(context: dict[str, Any]) -> list[dict[str, Any]]:
+    return [field for field in get_save_fields(context) if should_render_frontend_save_field(field)]
+
+
+def get_frontend_list_fields(context: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = [field for field in get_list_fields(context) if should_render_frontend_list_field(field)]
+    return fields[:6] if fields else []
+
+
+def get_frontend_query_fields(context: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = [field for field in get_query_fields(context) if should_render_frontend_query_field(field)]
+    return fields[:6] if fields else []
+
+
 def collect_java_type_imports(fields: list[dict[str, Any]]) -> list[str]:
     imports: list[str] = []
     java_type_to_import = {
@@ -972,8 +1388,8 @@ def normalize_java_field_type(field: dict[str, Any]) -> str:
 
 def render_ts_interface(name: str, fields: list[dict[str, Any]]) -> str:
     body = "\n".join(
-        f"  {field['java_field']}?: {field['ts_type']}" for field in fields
-    ) or "  id?: number"
+        f"  {field['java_field']}?: {field['ts_type']};" for field in fields
+    ) or "  id?: number;"
     return f"export interface {name} {{\n{body}\n}}"
 
 
@@ -1012,23 +1428,446 @@ def default_ts_value(field: dict[str, Any]) -> str:
 
 
 def render_vben_column(field: dict[str, Any]) -> str:
+    lines = [
+        "{",
+        f"  field: '{field['java_field']}',",
+        f"  title: '{field['column_comment']}',",
+        f"  minWidth: {resolve_vben_column_width(field)},",
+    ]
+    if field["java_type"] == "LocalDateTime":
+        lines.append("  formatter: 'formatDateTime',")
+    else:
+        dict_type = infer_vben_dict_type(field)
+        if dict_type:
+            lines.extend(
+                [
+                    "  cellRender: {",
+                    "    name: 'CellDict',",
+                    f"    props: {{ type: DICT_TYPE.{dict_type} }},",
+                    "  },",
+                ]
+            )
+        else:
+            lines.extend(build_vben_enum_formatter_lines(field))
+    if should_use_vben_tooltip(field):
+        lines.append("  showOverflow: 'tooltip',")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def render_vben_search_field(field: dict[str, Any], frontend_plan: dict[str, Any]) -> str:
+    clear_prop = resolve_vben_clear_prop_name(frontend_plan)
+    component = "RangePicker" if is_vben_range_picker_field(field) else "Input"
+    dict_type = infer_vben_dict_type(field)
+    enum_options = build_vben_inline_options(field)
+    if field["html_type"] in {"select", "radio", "checkbox"} or dict_type or enum_options:
+        component = "Select"
+    component_props: list[str] = []
+    if component == "RangePicker":
+        component_props.append("...getRangePickerDefaultProps()")
+        component_props.append(f"{clear_prop}: true")
+    elif component == "Select":
+        if dict_type:
+            component_props.append(
+                f"options: getDictOptions(DICT_TYPE.{dict_type}, '{resolve_vben_dict_value_type(field)}')"
+            )
+        elif enum_options:
+            component_props.append(f"options: {render_vben_options_literal(enum_options)}")
+        else:
+            component_props.append("options: []")
+        component_props.append(
+            f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'"
+        )
+        component_props.append(f"{clear_prop}: true")
+    else:
+        component_props.append(
+            f"placeholder: '请输入{sanitize_column_comment(field['column_comment'])}'"
+        )
+        component_props.append(f"{clear_prop}: true")
+    component_props_block = "\n".join(f"    {item}," for item in component_props)
     return (
-        "  {\n"
-        f"    title: '{field['column_comment']}',\n"
-        f"    dataIndex: '{field['java_field']}',\n"
-        "  }"
+        "{\n"
+        f"  fieldName: '{field['java_field']}',\n"
+        f"  label: '{field['column_comment']}',\n"
+        f"  component: '{component}',\n"
+        "  componentProps: {\n"
+        f"{component_props_block}\n"
+        "  },\n"
+        "}"
     )
 
 
-def render_vben_search_field(field: dict[str, Any]) -> str:
-    component = "DatePicker" if field["html_type"] in {"datetime", "date"} else "Input"
+def render_vben_form_field(field: dict[str, Any], frontend_plan: dict[str, Any]) -> str:
+    html_type = field["html_type"]
+    component = "Input"
+    dict_type = infer_vben_dict_type(field)
+    enum_options = build_vben_inline_options(field)
+    component_props = [f"placeholder: '请输入{sanitize_column_comment(field['column_comment'])}'"]
+    if html_type == "textarea":
+        component = "Textarea"
+    elif html_type in {"datetime", "date"}:
+        component = "DatePicker"
+        component_props = [
+            "showTime: true" if html_type == "datetime" else None,
+            "format: 'YYYY-MM-DD HH:mm:ss'" if html_type == "datetime" else "format: 'YYYY-MM-DD'",
+            "valueFormat: 'x'" if html_type == "datetime" else "valueFormat: 'YYYY-MM-DD'",
+            "!w-full",
+            f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'",
+        ]
+    elif html_type == "inputNumber":
+        component = "InputNumber"
+        component_props = [
+            f"placeholder: '请输入{sanitize_column_comment(field['column_comment'])}'",
+            "min: 0",
+            "class: '!w-full'" if resolve_vben_clear_prop_name(frontend_plan) == "clearable" else None,
+            "controlsPosition: 'right'" if resolve_vben_clear_prop_name(frontend_plan) == "clearable" else None,
+        ]
+    elif html_type in {"select", "radio"} and dict_type:
+        component = "RadioGroup" if html_type == "radio" else "Select"
+        component_props = [
+            f"options: getDictOptions(DICT_TYPE.{dict_type}, '{resolve_vben_dict_value_type(field)}')",
+            f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'" if component == "Select" else None,
+            "buttonStyle: 'solid'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
+            "optionType: 'button'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
+        ]
+    elif html_type in {"select", "radio"} and enum_options:
+        component = "RadioGroup" if html_type == "radio" else "Select"
+        component_props = [
+            f"options: {render_vben_options_literal(enum_options)}",
+            f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'" if component == "Select" else None,
+            "buttonStyle: 'solid'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
+            "optionType: 'button'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
+        ]
+    elif html_type == "select":
+        component = "Select"
+        component_props = [
+            f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'",
+            "options: []",
+        ]
+    elif html_type == "radio":
+        component = "RadioGroup"
+        component_props = [
+            "options: []",
+            "buttonStyle: 'solid'" if resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
+            "optionType: 'button'" if resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
+        ]
+    elif html_type == "checkbox":
+        component = "Checkbox"
+        component_props = ["options: []"]
+    elif html_type in {"imageUpload", "image-upload"}:
+        component = "ImageUpload"
+        component_props = []
+    elif html_type in {"fileUpload", "file-upload"}:
+        component = "FileUpload"
+        component_props = []
+    component_props = [item for item in component_props if item]
+    component_props = [
+        "class: '!w-full'" if item == "!w-full" else item for item in component_props
+    ]
+    rules_value = render_vben_form_rules(field)
+    rules_line = f"  rules: {rules_value},\n" if rules_value else ""
+    component_props_block = "\n".join(f"    {item}," for item in component_props)
+    component_block = ""
+    if component_props:
+        component_block = "  componentProps: {\n" + component_props_block + "\n  },\n"
     return (
-        "  {\n"
-        f"    fieldName: '{field['java_field']}',\n"
-        f"    label: '{field['column_comment']}',\n"
-        f"    component: '{component}',\n"
-        "  }"
+        "{\n"
+        f"  fieldName: '{field['java_field']}',\n"
+        f"  label: '{field['column_comment']}',\n"
+        f"  component: '{component}',\n"
+        f"{rules_line}"
+        f"{component_block}"
+        "}"
     )
+
+
+def render_vben_form_schema_fields(
+    fields: list[dict[str, Any]], frontend_plan: dict[str, Any]
+) -> str:
+    items = [
+        dedent(
+            """\
+            {
+              fieldName: 'id',
+              component: 'Input',
+              dependencies: {
+                triggerFields: [''],
+                show: () => false,
+              },
+            }"""
+        )
+    ]
+    effective_fields = fields or [
+        {
+            "java_field": "remark",
+            "column_comment": "备注",
+            "html_type": "textarea",
+            "nullable": True,
+        }
+    ]
+    items.extend(render_vben_form_field(field, frontend_plan) for field in effective_fields)
+    return ",\n".join(items)
+
+
+def render_vben_grid_form_schema_fields(
+    fields: list[dict[str, Any]], frontend_plan: dict[str, Any]
+) -> str:
+    if not fields:
+        fields = [
+            {
+                "java_field": "keyword",
+                "column_comment": "关键字",
+                "html_type": "input",
+            }
+        ]
+    return ",\n".join(render_vben_search_field(field, frontend_plan) for field in fields)
+
+
+def render_vben_grid_columns(fields: list[dict[str, Any]]) -> str:
+    items = [render_vben_column(field) for field in fields] or [
+        "{\n  field: 'id',\n  title: '编号',\n  minWidth: 100,\n}",
+        "{\n  field: 'remark',\n  title: '备注',\n  minWidth: 180,\n  showOverflow: 'tooltip',\n}",
+    ]
+    items.append(
+        dedent(
+            """\
+            {
+              title: '操作',
+              width: 160,
+              fixed: 'right',
+              slots: { default: 'actions' },
+            }"""
+        )
+    )
+    return ",\n".join(items)
+
+
+def build_frontend_api_import_path(frontend_plan: dict[str, Any], context: dict[str, Any]) -> str:
+    frontend_business_path = (
+        frontend_plan.get("frontend_business_path")
+        or context.get("generated_file_plan", {}).get("frontend_business_path")
+        or context["business_name"]
+    )
+    return f"#/api/{context['module_name']}/{frontend_business_path}"
+
+
+def resolve_frontend_entity_label(context: dict[str, Any]) -> str:
+    table_schema = context.get("table_schema") or {}
+    table_comment = table_schema.get("table_comment")
+    if isinstance(table_comment, str) and table_comment.strip():
+        return normalize_business_label(
+            table_comment.strip(),
+            str(context.get("business_name") or ""),
+        )
+    menu_name = context.get("menu_name")
+    if is_human_label(menu_name):
+        return str(menu_name).strip()
+    return context["entity_name"]
+
+
+def render_vben_api_interface_body(fields: list[dict[str, Any]]) -> str:
+    effective_fields = fields or [
+        {
+            "java_field": "id",
+            "column_comment": "编号",
+            "ts_type": "number",
+        },
+        {
+            "java_field": "remark",
+            "column_comment": "备注",
+            "ts_type": "string",
+        },
+    ]
+    return "\n".join(
+        f"/** {field['column_comment']} */\n{field['java_field']}?: {field['ts_type']};"
+        for field in effective_fields
+    )
+
+
+def build_vben_api_namespace(entity_name: str) -> str:
+    return f"{entity_name}Api"
+
+
+def should_render_frontend_save_field(field: dict[str, Any]) -> bool:
+    return field["java_field"] not in {
+        "deleteToken",
+        "deleted",
+        "tenantId",
+        "creator",
+        "updater",
+        "createTime",
+        "updateTime",
+    }
+
+
+def should_render_frontend_list_field(field: dict[str, Any]) -> bool:
+    return field["java_field"] not in {
+        "deleteToken",
+        "deleted",
+        "tenantId",
+    }
+
+
+def should_render_frontend_query_field(field: dict[str, Any]) -> bool:
+    if field["java_field"] == "createTime":
+        return True
+    if field.get("is_base_column"):
+        return False
+    return field["java_field"] not in {
+        "deleteToken",
+        "deleted",
+        "updateTime",
+        "tenantId",
+    }
+
+
+def infer_vben_dict_type(field: dict[str, Any]) -> str | None:
+    java_field = field["java_field"]
+    if java_field == "status":
+        return "COMMON_STATUS"
+    if java_field in {"sex", "userSex"} or java_field.endswith("Sex"):
+        return "SYSTEM_USER_SEX"
+    return None
+
+
+def collect_vben_dict_types(fields: list[dict[str, Any]]) -> list[str]:
+    result: list[str] = []
+    for field in fields:
+        dict_type = infer_vben_dict_type(field)
+        if dict_type and dict_type not in result:
+            result.append(dict_type)
+    return result
+
+
+def resolve_vben_dict_value_type(field: dict[str, Any]) -> str:
+    if field["ts_type"] == "number":
+        return "number"
+    if field["ts_type"] == "boolean":
+        return "boolean"
+    return "string"
+
+
+def sanitize_column_comment(comment: str) -> str:
+    return re.split(r"[:：]", comment, maxsplit=1)[0].strip() or comment
+
+
+def build_vben_inline_options(field: dict[str, Any]) -> list[dict[str, Any]]:
+    if infer_vben_dict_type(field):
+        return []
+    comment = str(field.get("column_comment") or "").strip()
+    if not comment or all(separator not in comment for separator in ("-", "：", ":", "，", ",")):
+        return []
+    option_text = re.split(r"[:：]", comment, maxsplit=1)[-1].strip() if ":" in comment or "：" in comment else comment
+    options: list[dict[str, Any]] = []
+    for segment in re.split(r"[，,；;]", option_text):
+        item = segment.strip()
+        if not item:
+            continue
+        match = re.match(r"(?P<value>[^-=:：\s]+)\s*[-=:：]\s*(?P<label>.+)", item)
+        if not match:
+            return []
+        raw_value = match.group("value").strip()
+        label = match.group("label").strip()
+        options.append(
+            {
+                "label": label,
+                "value": normalize_vben_option_value(raw_value, field["ts_type"]),
+            }
+        )
+    return options
+
+
+def normalize_vben_option_value(raw_value: str, ts_type: str) -> str | int | bool:
+    lowered = raw_value.lower()
+    if ts_type == "boolean" or lowered in {"true", "false"}:
+        return lowered == "true"
+    if ts_type == "number":
+        try:
+            return int(raw_value)
+        except ValueError:
+            pass
+    return raw_value
+
+
+def render_vben_options_literal(options: list[dict[str, Any]]) -> str:
+    rendered = ", ".join(
+        f"{{ label: '{escape_js_string(str(option['label']))}', value: {render_vben_option_value(option['value'])} }}"
+        for option in options
+    )
+    return f"[{rendered}]"
+
+
+def render_vben_option_value(value: str | int | bool) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return f"'{escape_js_string(value)}'"
+
+
+def build_vben_enum_formatter_lines(field: dict[str, Any]) -> list[str]:
+    options = build_vben_inline_options(field)
+    if not options:
+        return []
+    mappings = ", ".join(
+        f"{render_vben_option_key(option['value'])}: '{escape_js_string(str(option['label']))}'"
+        for option in options
+    )
+    return [
+        "  formatter: ({ cellValue }) => {",
+        f"    const labels: Record<string, string> = {{ {mappings} }};",
+        "    return labels[String(cellValue)] ?? cellValue ?? '-';",
+        "  },",
+    ]
+
+
+def render_vben_option_key(value: str | int | bool) -> str:
+    if isinstance(value, bool):
+        return "'true'" if value else "'false'"
+    return f"'{value}'"
+
+
+def resolve_vben_column_width(field: dict[str, Any]) -> int:
+    if field["java_type"] == "LocalDateTime":
+        return 180
+    if field["html_type"] in {"textarea"} or should_use_vben_tooltip(field):
+        return 200
+    if field["html_type"] in {"imageUpload", "image-upload"}:
+        return 140
+    return 120
+
+
+def should_use_vben_tooltip(field: dict[str, Any]) -> bool:
+    return field["html_type"] in {"textarea"} or len(field["column_comment"]) >= 18
+
+
+def resolve_vben_clear_prop_name(frontend_plan: dict[str, Any]) -> str:
+    return "clearable" if frontend_plan.get("project_type", "").startswith("VUE3_VBEN5_EP") else "allowClear"
+
+
+def is_vben_range_picker_field(field: dict[str, Any]) -> bool:
+    return field["html_type"] in {"datetime", "date"}
+
+
+def should_use_vben_common_status_default(field: dict[str, Any]) -> bool:
+    return (
+        field["java_field"] == "status"
+        and field["html_type"] == "radio"
+        and not field.get("nullable")
+        and infer_vben_dict_type(field) == "COMMON_STATUS"
+    )
+
+
+def render_vben_form_rules(field: dict[str, Any]) -> str | None:
+    if should_use_vben_common_status_default(field):
+        return "z.number().default(CommonStatusEnum.ENABLE)"
+    if not field.get("nullable"):
+        return "'required'"
+    return None
+
+
+def escape_js_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def render_uniapp_search_item(field: dict[str, Any]) -> str:

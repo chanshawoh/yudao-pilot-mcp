@@ -207,3 +207,284 @@ def unique_paths(paths: list[Path]) -> list[Path]:
         seen.add(path)
         result.append(path)
     return result
+
+
+def import_pymysql() -> Any:
+    import pymysql
+
+    return pymysql
+
+
+def apply_menu_plan_to_database(
+    database_config: dict[str, Any] | DatabaseConfig,
+    menu_plan: dict[str, Any],
+) -> dict[str, Any]:
+    config = (
+        database_config
+        if isinstance(database_config, DatabaseConfig)
+        else DatabaseConfig.model_validate(database_config)
+    )
+    pymysql = import_pymysql()
+    connection = pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.username,
+        password=config.password,
+        database=config.database,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
+    )
+    created: list[str] = []
+    updated: list[str] = []
+    skipped: list[str] = []
+    root_menu = menu_plan["root_menu"]
+    business_menu = menu_plan["business_menu"]
+    buttons = menu_plan["buttons"]
+    try:
+        with connection.cursor() as cursor:
+            root_id, root_status = ensure_root_menu(cursor, root_menu)
+            if root_status == "created":
+                created.append(f"根菜单:{root_menu['name']}")
+            elif root_status == "updated":
+                updated.append(f"根菜单:{root_menu['name']}")
+            else:
+                skipped.append(f"根菜单:{root_menu['name']}")
+
+            business_id, business_status = ensure_business_menu(cursor, root_id, business_menu)
+            if business_status == "created":
+                created.append(f"业务菜单:{business_menu['name']}")
+            elif business_status == "updated":
+                updated.append(f"业务菜单:{business_menu['name']}")
+            else:
+                skipped.append(f"业务菜单:{business_menu['name']}")
+
+            for button in buttons:
+                _, button_created = ensure_button_menu(cursor, business_id, button)
+                label = f"按钮:{button['permission']}"
+                if button_created:
+                    created.append(label)
+                else:
+                    skipped.append(label)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+    return {
+        "ok": True,
+        "database": config.database,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+    }
+
+
+def ensure_root_menu(cursor: Any, menu: dict[str, Any]) -> tuple[int, str]:
+    cursor.execute(
+        """
+        SELECT id, name, path, icon
+        FROM system_menu
+        WHERE deleted = b'0'
+          AND parent_id = 0
+          AND (path = %s OR path = %s OR name = %s)
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (menu["lookup_paths"][0], menu["lookup_paths"][1], menu["name"]),
+    )
+    existing = cursor.fetchone()
+    if existing:
+        status = sync_existing_root_menu(cursor, existing, menu)
+        return int(existing["id"]), status
+
+    cursor.execute(
+        """
+        SELECT COALESCE(MAX(sort), 0) AS max_sort
+        FROM system_menu
+        WHERE deleted = b'0' AND parent_id = 0
+        """
+    )
+    sort_row = cursor.fetchone() or {}
+    sort_value = max(int(sort_row.get("max_sort") or 0) + 10, int(menu["sort"]))
+    cursor.execute(
+        """
+        INSERT INTO system_menu(
+            name, permission, type, sort, parent_id,
+            path, icon, component, component_name, status,
+            visible, keep_alive, always_show, creator, updater, deleted
+        )
+        VALUES (
+            %s, '', 1, %s, 0,
+            %s, %s, NULL, NULL, 0,
+            b'1', b'1', b'1', %s, %s, b'0'
+        )
+        """,
+        (menu["name"], sort_value, menu["path"], menu["icon"], "yudao-pilot", "yudao-pilot"),
+    )
+    return int(cursor.lastrowid), "created"
+
+
+def ensure_business_menu(
+    cursor: Any, parent_id: int, menu: dict[str, Any]
+) -> tuple[int, str]:
+    cursor.execute(
+        """
+        SELECT id, parent_id, name, path, icon, component, component_name
+        FROM system_menu
+        WHERE deleted = b'0'
+          AND parent_id = %s
+          AND (component = %s OR path = %s)
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (parent_id, menu["component"], menu["path"]),
+    )
+    existing = cursor.fetchone()
+    if existing:
+        status = sync_existing_business_menu(cursor, existing, parent_id, menu)
+        return int(existing["id"]), status
+
+    cursor.execute(
+        """
+        INSERT INTO system_menu(
+            name, permission, type, sort, parent_id,
+            path, icon, component, component_name, status,
+            visible, keep_alive, always_show, creator, updater, deleted
+        )
+        VALUES (
+            %s, '', 2, %s, %s,
+            %s, %s, %s, %s, 0,
+            b'1', b'1', b'1', %s, %s, b'0'
+        )
+        """,
+        (
+            menu["name"],
+            int(menu["sort"]),
+            parent_id,
+            menu["path"],
+            menu["icon"],
+            menu["component"],
+            menu["component_name"],
+            "yudao-pilot",
+            "yudao-pilot",
+        ),
+    )
+    return int(cursor.lastrowid), "created"
+
+
+def ensure_button_menu(
+    cursor: Any, parent_id: int, button: dict[str, Any]
+) -> tuple[int, bool]:
+    cursor.execute(
+        """
+        SELECT id
+        FROM system_menu
+        WHERE deleted = b'0' AND permission = %s
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (button["permission"],),
+    )
+    existing = cursor.fetchone()
+    if existing:
+        return int(existing["id"]), False
+
+    cursor.execute(
+        """
+        INSERT INTO system_menu(
+            name, permission, type, sort, parent_id,
+            path, icon, component, status,
+            visible, keep_alive, always_show, creator, updater, deleted
+        )
+        VALUES (
+            %s, %s, 3, %s, %s,
+            '', '', '', 0,
+            b'1', b'1', b'1', %s, %s, b'0'
+        )
+        """,
+        (
+            button["name"],
+            button["permission"],
+            int(button["sort"]),
+            parent_id,
+            "yudao-pilot",
+            "yudao-pilot",
+        ),
+    )
+    return int(cursor.lastrowid), True
+
+
+def sync_existing_root_menu(cursor: Any, existing: dict[str, Any], menu: dict[str, Any]) -> str:
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if str(existing.get("name") or "") != str(menu["name"]):
+        updates.append("name = %s")
+        params.append(menu["name"])
+    if str(existing.get("path") or "") != str(menu["path"]):
+        updates.append("path = %s")
+        params.append(menu["path"])
+    if str(existing.get("icon") or "") != str(menu["icon"]):
+        updates.append("icon = %s")
+        params.append(menu["icon"])
+
+    if not updates:
+        return "skipped"
+
+    updates.append("updater = %s")
+    params.append("yudao-pilot")
+    params.append(int(existing["id"]))
+    cursor.execute(
+        f"""
+        UPDATE system_menu
+        SET {", ".join(updates)}
+        WHERE id = %s
+        """,
+        tuple(params),
+    )
+    return "updated"
+
+
+def sync_existing_business_menu(
+    cursor: Any, existing: dict[str, Any], parent_id: int, menu: dict[str, Any]
+) -> str:
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if str(existing.get("name") or "") != str(menu["name"]):
+        updates.append("name = %s")
+        params.append(menu["name"])
+    if str(existing.get("path") or "") != str(menu["path"]):
+        updates.append("path = %s")
+        params.append(menu["path"])
+    if str(existing.get("icon") or "") != str(menu["icon"]):
+        updates.append("icon = %s")
+        params.append(menu["icon"])
+    if str(existing.get("component") or "") != str(menu["component"]):
+        updates.append("component = %s")
+        params.append(menu["component"])
+    if str(existing.get("component_name") or "") != str(menu["component_name"]):
+        updates.append("component_name = %s")
+        params.append(menu["component_name"])
+    if parent_id != int(existing.get("parent_id") or parent_id):
+        updates.append("parent_id = %s")
+        params.append(parent_id)
+
+    if not updates:
+        return "skipped"
+
+    updates.append("updater = %s")
+    params.append("yudao-pilot")
+    params.append(int(existing["id"]))
+    cursor.execute(
+        f"""
+        UPDATE system_menu
+        SET {", ".join(updates)}
+        WHERE id = %s
+        """,
+        tuple(params),
+    )
+    return "updated"

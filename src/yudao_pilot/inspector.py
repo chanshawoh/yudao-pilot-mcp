@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .models import ProjectDetection, ProjectValidation, SUPPORTED_BACKEND_TYPES, SUPPORTED_FRONTEND_TYPES
+from .models import (
+    FRONTEND_CODEGEN_TYPE_TO_PROJECT_TYPE,
+    ProjectDetection,
+    ProjectValidation,
+    SUPPORTED_BACKEND_TYPES,
+    SUPPORTED_FRONTEND_PROJECT_TYPES,
+)
 
 if TYPE_CHECKING:
     from .config import WorkspaceConfig
@@ -78,6 +84,7 @@ def inspect_project_path(project_path: str | Path) -> dict[str, Any]:
             ).model_dump(),
             "supported_backend_types": list(SUPPORTED_BACKEND_TYPES),
             "supported_frontend_types": list(SUPPORTED_FRONTEND_TYPES),
+            "supported_frontend_project_types": list(SUPPORTED_FRONTEND_PROJECT_TYPES),
         }
 
     backend_detection = inspect_backend_project(path)
@@ -100,7 +107,7 @@ def inspect_project_path(project_path: str | Path) -> dict[str, Any]:
         "backend": backend_detection.model_dump(),
         "frontend": frontend_detection.model_dump(),
         "supported_backend_types": list(SUPPORTED_BACKEND_TYPES),
-        "supported_frontend_types": list(SUPPORTED_FRONTEND_TYPES),
+        "supported_frontend_types": list(SUPPORTED_FRONTEND_PROJECT_TYPES),
     }
 
 
@@ -160,15 +167,19 @@ def validate_frontend_project(
         )
 
     detection = inspect_frontend_project(project_path)
-    matches_expected = detection.supported and detection.detected_type == expected_type
+    expected_project_type = FRONTEND_CODEGEN_TYPE_TO_PROJECT_TYPE.get(expected_type)
+    matches_expected = detection.supported and detection.detected_type == expected_project_type
     error_code = None
     reason = None
     if not detection.supported:
         error_code = "frontend_not_supported"
         reason = "当前前端项目未识别为受支持的后台前端类型"
-    elif detection.detected_type != expected_type:
+    elif detection.detected_type != expected_project_type:
         error_code = "frontend_type_mismatch"
-        reason = f"前端项目类型不匹配，期望 {expected_type}，实际识别为 {detection.detected_type or 'unknown'}"
+        reason = (
+            f"前端项目类型不匹配，期望模板 {expected_type} 对应项目 "
+            f"{expected_project_type or 'unknown'}，实际识别为 {detection.detected_type or 'unknown'}"
+        )
 
     return ProjectValidation(
         kind="frontend",
@@ -382,7 +393,7 @@ def inspect_frontend_project(project_path: Path) -> ProjectDetection:
     return ProjectDetection(
         kind="frontend",
         detected_type=detected_type,
-        supported=detected_type in SUPPORTED_FRONTEND_TYPES,
+        supported=detected_type in SUPPORTED_FRONTEND_PROJECT_TYPES,
         confidence=confidence,
         evidence=best_evidence,
     )

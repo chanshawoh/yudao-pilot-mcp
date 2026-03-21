@@ -325,10 +325,10 @@ def infer_html_type(column_name: str, sql_type: str) -> str:
         return "radio"
     if column_name.endswith("type"):
         return "select"
-    if column_name.endswith(("image", "avatar")):
-        return "image-upload"
+    if any(token in column_name for token in ("image", "avatar", "logo", "icon")):
+        return "imageUpload"
     if column_name.endswith("file"):
-        return "file-upload"
+        return "fileUpload"
     if column_name.endswith(("content", "description", "remark")) or sql_type in {"text", "mediumtext", "longtext"}:
         return "textarea"
     if sql_type in {"datetime", "timestamp"} or column_name.endswith(("time", "birthday")):

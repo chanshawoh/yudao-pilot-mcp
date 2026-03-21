@@ -18,8 +18,12 @@ from .schema import inspect_table_schema
 
 
 FRONTEND_TYPE_TO_CODEGEN_FRONT_TYPES: dict[str, list[int]] = {
-    "yudao-ui-admin-vue3": [20],
-    "yudao-ui-admin-uniapp": [60],
+    "VUE3_ELEMENT_PLUS": [20],
+    "VUE3_VBEN5_ANTD_SCHEMA": [40],
+    "VUE3_VBEN5_ANTD_GENERAL": [41],
+    "VUE3_VBEN5_EP_SCHEMA": [50],
+    "VUE3_VBEN5_EP_GENERAL": [51],
+    "VUE3_ADMIN_UNIAPP_WOT": [60],
 }
 
 CODEGEN_FRONT_TYPE_LABELS: dict[int, str] = {
@@ -118,6 +122,7 @@ def build_codegen_context(
         database_result["database"] if database_result.get("ok") else None,
     )
     generated_file_plan = build_generated_file_plan(
+        table_name=table_name,
         module_name=module_name,
         business_name=business_name,
         entity_name=entity_name,
@@ -196,8 +201,6 @@ def resolve_frontend_codegen_targets(
     for frontend in config.projects.frontend:
         frontend_root = resolve_project_path(workspace_root, frontend.path)
         type_candidates = FRONTEND_TYPE_TO_CODEGEN_FRONT_TYPES.get(frontend.type)
-        if type_candidates is None and frontend.type == "yudao-ui-admin-vben":
-            type_candidates = infer_vben_front_types(frontend_root)
 
         default_front_type = type_candidates[0] if type_candidates else None
         results.append(
@@ -218,12 +221,12 @@ def infer_vben_front_types(frontend_root: Path) -> list[int]:
     has_web_ele = (app_root / "web-ele").exists()
     has_web_antd = (app_root / "web-antd").exists()
     if has_web_ele and has_web_antd:
-        return [50, 40]
+        return [40, 50]
     if has_web_ele:
         return [50]
     if has_web_antd:
         return [40]
-    return [50]
+    return [40]
 
 
 def resolve_menu_context(
@@ -620,6 +623,7 @@ def resolve_codegen_db_schemas(
 
 def build_generated_file_plan(
     *,
+    table_name: str,
     module_name: str,
     business_name: str,
     entity_name: str,
@@ -628,6 +632,10 @@ def build_generated_file_plan(
     unit_test_enable: bool,
 ) -> dict[str, Any]:
     simple_class_name = build_simple_class_name(module_name, entity_name)
+    frontend_business_path = build_frontend_business_path(
+        business_name=business_name,
+        table_name=table_name,
+    )
     backend_files = build_backend_file_plan(
         module_name=module_name,
         business_name=business_name,
@@ -641,10 +649,11 @@ def build_generated_file_plan(
             "default_front_type": frontend_target["default_front_type"],
             "default_front_type_label": frontend_target["default_front_type_label"],
             "ambiguous": frontend_target["ambiguous"],
+            "frontend_business_path": frontend_business_path,
             "relative_paths": build_frontend_file_plan(
                 front_type=frontend_target["default_front_type"],
                 module_name=module_name,
-                business_name=business_name,
+                frontend_business_path=frontend_business_path,
                 simple_class_name=simple_class_name,
             ),
         }
@@ -653,6 +662,7 @@ def build_generated_file_plan(
     return {
         "backend": backend_files,
         "frontends": frontend_files,
+        "frontend_business_path": frontend_business_path,
         "simple_class_name": simple_class_name,
     }
 
@@ -739,37 +749,65 @@ def build_frontend_file_plan(
     *,
     front_type: int | None,
     module_name: str,
-    business_name: str,
+    frontend_business_path: str,
     simple_class_name: str,
 ) -> list[str]:
     if front_type == 20:
         return [
-            f"src/views/{module_name}/{business_name}/index.vue",
-            f"src/views/{module_name}/{business_name}/{simple_class_name}Form.vue",
-            f"src/api/{module_name}/{business_name}/index.ts",
+            f"src/views/{module_name}/{frontend_business_path}/index.vue",
+            f"src/views/{module_name}/{frontend_business_path}/{simple_class_name}Form.vue",
+            f"src/api/{module_name}/{frontend_business_path}/index.ts",
         ]
     if front_type == 60:
         return [
-            f"src/api/{module_name}/{business_name}/index.ts",
-            f"src/pages-{module_name}/{business_name}/index.vue",
-            f"src/pages-{module_name}/{business_name}/components/search-form.vue",
-            f"src/pages-{module_name}/{business_name}/form/index.vue",
-            f"src/pages-{module_name}/{business_name}/detail/index.vue",
+            f"src/api/{module_name}/{frontend_business_path}/index.ts",
+            f"src/pages-{module_name}/{frontend_business_path}/index.vue",
+            f"src/pages-{module_name}/{frontend_business_path}/components/search-form.vue",
+            f"src/pages-{module_name}/{frontend_business_path}/form/index.vue",
+            f"src/pages-{module_name}/{frontend_business_path}/detail/index.vue",
         ]
     if front_type in {40, 50}:
+        root = resolve_vben_frontend_root(front_type)
         return [
-            f"src/views/{module_name}/{business_name}/data.ts",
-            f"src/views/{module_name}/{business_name}/index.vue",
-            f"src/views/{module_name}/{business_name}/modules/form.vue",
-            f"src/api/{module_name}/{business_name}/index.ts",
+            f"{root}/src/views/{module_name}/{frontend_business_path}/data.ts",
+            f"{root}/src/views/{module_name}/{frontend_business_path}/index.vue",
+            f"{root}/src/views/{module_name}/{frontend_business_path}/modules/form.vue",
+            f"{root}/src/api/{module_name}/{frontend_business_path}/index.ts",
         ]
     if front_type in {41, 51}:
+        root = resolve_vben_frontend_root(front_type)
         return [
-            f"src/views/{module_name}/{business_name}/index.vue",
-            f"src/views/{module_name}/{business_name}/modules/form.vue",
-            f"src/api/{module_name}/{business_name}/index.ts",
+            f"{root}/src/views/{module_name}/{frontend_business_path}/index.vue",
+            f"{root}/src/views/{module_name}/{frontend_business_path}/modules/form.vue",
+            f"{root}/src/api/{module_name}/{frontend_business_path}/index.ts",
         ]
     return []
+
+
+def build_frontend_business_path(*, business_name: str, table_name: str) -> str:
+    raw_business = str(business_name or "").replace("\\", "/").strip().strip("/")
+    if not raw_business:
+        return normalize_snake_case(table_name).replace("_", "/")
+
+    business_segments = [segment.strip() for segment in raw_business.split("/") if segment.strip()]
+    if not business_segments:
+        return normalize_snake_case(table_name).replace("_", "/")
+
+    business_leaf = normalize_snake_case(business_segments[-1])
+    normalized_table = normalize_snake_case(table_name)
+    if normalized_table == business_leaf:
+        return "/".join(business_segments)
+    if normalized_table.startswith(business_leaf + "_"):
+        suffix = normalized_table[len(business_leaf) + 1 :]
+        if suffix:
+            return "/".join(business_segments + suffix.split("_"))
+    return "/".join(business_segments)
+
+
+def resolve_vben_frontend_root(front_type: int) -> str:
+    if front_type in {40, 41}:
+        return "apps/web-antd"
+    return "apps/web-ele"
 
 
 def build_backend_java_path(

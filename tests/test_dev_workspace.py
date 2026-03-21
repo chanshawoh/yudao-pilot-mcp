@@ -12,9 +12,9 @@ def test_dev_workspace_fixture_config_is_valid(repo_root: Path) -> None:
 
     assert config.projects.backend.type == "ruoyi-vue-pro-jdk17"
     assert [frontend.type for frontend in config.projects.frontend] == [
-        "yudao-ui-admin-vue3",
-        "yudao-ui-admin-vben",
-        "yudao-ui-admin-uniapp",
+        "VUE3_ELEMENT_PLUS",
+        "VUE3_VBEN5_ANTD_SCHEMA",
+        "VUE3_ADMIN_UNIAPP_WOT",
     ]
 
     result = validate_workspace_projects(workspace_root, config)
