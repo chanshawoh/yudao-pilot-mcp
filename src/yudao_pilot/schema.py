@@ -106,6 +106,8 @@ def parse_table_schema_from_sql(sql_dump_path: Path, table_name: str) -> dict[st
         "schema_source": "sql-dump",
         "message": "已从 MySQL 结构文件解析表字段",
         "columns": columns,
+        "ai_component_hints": build_ai_component_hints(columns),
+        "available_components": AVAILABLE_COMPONENTS,
     }
 
 
@@ -188,7 +190,27 @@ def parse_table_schema_from_database(
         "database_name": database_config.database,
         "message": "已从真实数据库解析表字段",
         "columns": columns,
+        "ai_component_hints": build_ai_component_hints(columns),
+        "available_components": AVAILABLE_COMPONENTS,
     }
+
+
+def parse_type_meta(raw_type: str) -> dict[str, Any]:
+    """Extract max_length, precision, scale from raw SQL type like varchar(255) or decimal(10,6)."""
+    meta: dict[str, Any] = {}
+    m = re.match(r"[a-z]+\((\d+)(?:,\s*(\d+))?\)", raw_type.lower())
+    if not m:
+        return meta
+    first = int(m.group(1))
+    second = int(m.group(2)) if m.group(2) else None
+    base = raw_type.split("(", 1)[0].lower()
+    if base in {"varchar", "char", "tinytext"}:
+        meta["max_length"] = first
+    elif base in {"decimal", "numeric"}:
+        meta["precision"] = first
+        meta["scale"] = second if second is not None else 0
+        meta["integer_digits"] = first - (second or 0)
+    return meta
 
 
 def parse_database_column(row: dict[str, Any]) -> dict[str, Any]:
@@ -201,6 +223,7 @@ def parse_database_column(row: dict[str, Any]) -> dict[str, Any]:
     is_internal = column_name in INTERNAL_COLUMNS
     is_auto_increment = "auto_increment" in str(row.get("EXTRA") or "").lower()
     nullable = str(row.get("IS_NULLABLE") or "").upper() == "YES"
+    type_meta = parse_type_meta(raw_type)
 
     return {
         "column_name": column_name,
@@ -210,11 +233,12 @@ def parse_database_column(row: dict[str, Any]) -> dict[str, Any]:
         "java_field": java_field,
         "java_type": map_java_type(sql_type),
         "ts_type": map_ts_type(sql_type),
-        "html_type": infer_html_type(column_name, sql_type),
+        "html_type": infer_html_type(column_name, sql_type, str(row.get("COLUMN_COMMENT") or "")),
         "nullable": nullable,
         "primary_key": is_primary_key,
         "auto_increment": is_auto_increment,
         "is_base_column": is_base_column,
+        **type_meta,
         "in_do": not is_base_column and not is_internal,
         "in_save": not is_base_column and not is_primary_key and not is_internal,
         "in_resp": (not is_base_column or column_name == "create_time") and not is_internal,
@@ -247,12 +271,13 @@ def parse_column_line(line: str, primary_keys: set[str]) -> dict[str, Any] | Non
     java_field = snake_to_camel(column_name)
     java_type = map_java_type(sql_type)
     ts_type = map_ts_type(sql_type)
-    html_type = infer_html_type(column_name, sql_type)
+    html_type = infer_html_type(column_name, sql_type, column_comment or "")
     is_primary_key = column_name in primary_keys
     is_base_column = column_name in BASE_AUDIT_COLUMNS
     is_internal = column_name in INTERNAL_COLUMNS
     is_auto_increment = "AUTO_INCREMENT" in line.upper()
     nullable = "NOT NULL" not in line.upper()
+    type_meta = parse_type_meta(raw_type)
 
     return {
         "column_name": column_name,
@@ -267,6 +292,7 @@ def parse_column_line(line: str, primary_keys: set[str]) -> dict[str, Any] | Non
         "primary_key": is_primary_key,
         "auto_increment": is_auto_increment,
         "is_base_column": is_base_column,
+        **type_meta,
         "in_do": not is_base_column and not is_internal,
         "in_save": not is_base_column and not is_primary_key and not is_internal,
         "in_resp": (not is_base_column or column_name == "create_time") and not is_internal,
@@ -326,22 +352,80 @@ def map_ts_type(sql_type: str) -> str:
     return "string"
 
 
-def infer_html_type(column_name: str, sql_type: str) -> str:
-    if column_name.endswith(("status", "sex")):
-        return "radio"
-    if column_name.endswith("type"):
-        return "select"
-    if any(token in column_name for token in ("image", "avatar", "logo", "icon")):
+def infer_html_type(column_name: str, sql_type: str, column_comment: str = "") -> str:
+    name_lower = column_name.lower()
+    is_string_type = sql_type in {
+        "varchar", "char", "text", "mediumtext", "longtext", "tinytext",
+    }
+
+    _IMAGE_NAME_TOKENS = (
+        "image", "avatar", "logo", "icon", "pic", "photo",
+        "cover", "banner", "thumbnail",
+    )
+    if any(token in name_lower for token in _IMAGE_NAME_TOKENS) and is_string_type:
         return "imageUpload"
-    if column_name.endswith("file"):
+    _IMAGE_COMMENT_KW = ("图片", "封面图", "轮播图", "头像", "图标", "缩略图", "相册")
+    if is_string_type and any(kw in column_comment for kw in _IMAGE_COMMENT_KW):
+        return "imageUpload"
+
+    _FILE_NAME_TOKENS = ("video", "file", "attachment")
+    if any(token in name_lower for token in _FILE_NAME_TOKENS) and is_string_type:
         return "fileUpload"
-    if column_name.endswith(("content", "description", "remark")) or sql_type in {"text", "mediumtext", "longtext"}:
+    _FILE_COMMENT_KW = ("视频", "文件", "附件")
+    if is_string_type and any(kw in column_comment for kw in _FILE_COMMENT_KW):
+        return "fileUpload"
+
+    if name_lower.endswith(("status", "sex")):
+        return "radio"
+    if name_lower.endswith("type"):
+        return "select"
+
+    if sql_type in {"text", "mediumtext", "longtext"}:
+        return "editor"
+
+    if name_lower.endswith(("content", "description", "remark", "memo", "note", "intro", "summary")):
         return "textarea"
-    if sql_type in {"datetime", "timestamp"} or column_name.endswith(("time", "birthday")):
+
+    if sql_type in {"datetime", "timestamp"} or name_lower.endswith(("time", "birthday")):
         return "datetime"
     if sql_type == "date":
         return "date"
     return "input"
+
+
+AVAILABLE_COMPONENTS = [
+    {"component": "Input", "html_type": "input", "description": "单行文本输入框，适用于短文本如名称、编号、手机号等"},
+    {"component": "InputNumber", "html_type": "inputNumber", "description": "数字输入框，适用于数值如金额、数量、排序号、经纬度等"},
+    {"component": "Textarea", "html_type": "textarea", "description": "多行文本域，适用于中等长度文本如备注、描述等"},
+    {"component": "RichTextarea", "html_type": "editor", "description": "富文本编辑器，适用于长文本内容如文章、详情、公告等"},
+    {"component": "Select", "html_type": "select", "description": "下拉选择框，适用于枚举选项超过3个的场景如类型选择"},
+    {"component": "RadioGroup", "html_type": "radio", "description": "单选框组，适用于枚举选项不超过3个的场景如状态、性别"},
+    {"component": "Checkbox", "html_type": "checkbox", "description": "复选框，适用于布尔值或多选场景"},
+    {"component": "DatePicker", "html_type": "datetime", "description": "日期时间选择器，适用于日期/时间字段"},
+    {"component": "ImageUpload", "html_type": "imageUpload", "description": "图片上传组件，适用于图片URL字段如头像、封面图、Logo、轮播图等"},
+    {"component": "FileUpload", "html_type": "fileUpload", "description": "文件上传组件，适用于文件/视频/附件URL字段"},
+]
+
+
+def build_ai_component_hints(columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Identify columns with html_type='input' that might need AI review."""
+    undetermined: list[dict[str, Any]] = []
+    for col in columns:
+        if col.get("html_type") != "input":
+            continue
+        if col.get("is_base_column") or col.get("primary_key"):
+            continue
+        undetermined.append({
+            "column_name": col["column_name"],
+            "java_field": col["java_field"],
+            "column_comment": col.get("column_comment", ""),
+            "sql_type": col.get("sql_type", ""),
+            "java_type": col.get("java_type", ""),
+            "current_html_type": "input",
+        })
+    if not undetermined:
+        return []
+    return undetermined
 
 
 def snake_to_camel(value: str) -> str:

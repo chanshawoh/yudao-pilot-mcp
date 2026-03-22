@@ -155,9 +155,10 @@ def render_save_req_vo(relative_path: str, context: dict[str, Any]) -> str:
     save_fields = get_save_fields(context)
     imports = render_java_import_block(
         f"{validation_package}.constraints.NotNull",
+        *collect_save_vo_imports(save_fields, validation_package),
         *collect_java_type_imports(save_fields),
     )
-    field_lines = "\n\n".join(render_java_field(field) for field in save_fields) or (
+    field_lines = "\n\n".join(render_save_vo_field(field) for field in save_fields) or (
         '    @Schema(description = "备注")\n'
         '    private String remark;'
     )
@@ -736,26 +737,12 @@ def render_vben_index(
 ) -> str:
     entity_name = context["entity_name"]
     entity_label = resolve_frontend_entity_label(context)
-    uses_schema = frontend_plan["default_front_type"] in {40, 50}
     api_import_path = build_frontend_api_import_path(frontend_plan, context)
     api_namespace = build_vben_api_namespace(entity_name)
     uses_element_plus = is_vben_ele_codegen_type(frontend_plan["project_type"])
-    grid_columns_expr = "useGridColumns()" if uses_schema else "gridColumns"
-    grid_form_expr = "useGridFormSchema()" if uses_schema else "gridFormSchema"
-    schema_import = "import { useGridColumns, useGridFormSchema } from './data';" if uses_schema else ""
-    inline_grid_source = ""
-    if not uses_schema:
-        inline_grid_source = dedent(
-            f"""\
-            const gridFormSchema = [
-            {indent_block(render_vben_grid_form_schema_fields(get_frontend_query_fields(context), frontend_plan), "  ")}
-            ];
-
-            const gridColumns: VxeTableGridOptions<{api_namespace}.{entity_name}>['columns'] = [
-            {indent_block(render_vben_grid_columns(get_frontend_list_fields(context)), "  ")}
-            ];
-            """
-        ).strip() + "\n\n"
+    grid_columns_expr = "useGridColumns()"
+    grid_form_expr = "useGridFormSchema()"
+    schema_import = "import { useGridColumns, useGridFormSchema } from './data';"
     feedback_import = (
         "import { ElLoading, ElMessage } from 'element-plus';"
         if uses_element_plus
@@ -833,17 +820,13 @@ def render_vben_index(
         "import { $t } from '#/locales';",
         "",
     ]
-    if schema_import:
-        lines.append(schema_import)
+    lines.append(schema_import)
     lines.extend(
         [
             "import Form from './modules/form.vue';",
             "",
         ]
     )
-    if inline_grid_source:
-        lines.extend(inline_grid_source.strip().splitlines())
-        lines.append("")
     lines.extend(
         [
             "const [FormModal, formModalApi] = useVbenModal({",
@@ -934,19 +917,9 @@ def render_vben_form(
     entity_label = resolve_frontend_entity_label(context)
     api_import_path = build_frontend_api_import_path(frontend_plan, context)
     api_namespace = build_vben_api_namespace(entity_name)
-    uses_schema = frontend_plan["default_front_type"] in {40, 50}
     uses_element_plus = is_vben_ele_codegen_type(frontend_plan["project_type"])
-    form_schema_source = ""
-    schema_import = "import { useFormSchema } from '../data';" if uses_schema else ""
-    schema_expr = "useFormSchema()" if uses_schema else "formSchema"
-    if not uses_schema:
-        form_schema_source = dedent(
-            f"""\
-            const formSchema = [
-            {indent_block(render_vben_form_schema_fields(get_frontend_save_fields(context), frontend_plan), "  ")}
-            ];
-            """
-        ).strip() + "\n\n"
+    schema_import = "import { useFormSchema } from '../data';"
+    schema_expr = "useFormSchema()"
     feedback_import = (
         "import { ElMessage } from 'element-plus';"
         if uses_element_plus
@@ -971,12 +944,8 @@ def render_vben_form(
         "import { $t } from '#/locales';",
         "",
     ]
-    if schema_import:
-        lines.append(schema_import)
-        lines.append("")
-    if form_schema_source:
-        lines.extend(form_schema_source.strip().splitlines())
-        lines.append("")
+    lines.append(schema_import)
+    lines.append("")
     lines.extend(
         [
             "const emit = defineEmits(['success']);",
@@ -1419,17 +1388,82 @@ def render_java_import_block(*imports: str) -> str:
 
 def render_java_field(field: dict[str, Any]) -> str:
     java_type = normalize_java_field_type(field)
+    desc = escape_java_string(field["column_comment"])
     return (
-        f'    @Schema(description = "{escape_java_string(field["column_comment"])}")\n'
+        f'    @Schema(description = "{desc}")\n'
         f'    private {java_type} {field["java_field"]};'
     )
 
 
+def render_save_vo_field(field: dict[str, Any]) -> str:
+    """Render a SaveReqVO field with validation annotations."""
+    java_type = normalize_java_field_type(field)
+    desc = escape_java_string(field["column_comment"])
+    label = sanitize_column_comment(field["column_comment"])
+    lines = [f'    @Schema(description = "{desc}")']
+
+    if not field.get("nullable"):
+        if java_type == "String":
+            lines.append(f'    @NotEmpty(message = "{label}不能为空")')
+        else:
+            lines.append(f'    @NotNull(message = "{label}不能为空")')
+
+    if java_type == "BigDecimal":
+        integer_digits = field.get("integer_digits")
+        scale = field.get("scale")
+        if integer_digits is not None and scale is not None:
+            lines.append(
+                f'    @Digits(integer = {integer_digits}, fraction = {scale}, message = "{label}数值超出范围")'
+            )
+
+    if java_type == "String":
+        max_length = field.get("max_length")
+        if max_length and max_length < 10000:
+            lines.append(f'    @Size(max = {max_length}, message = "{label}长度不能超过{max_length}个字符")')
+
+    lines.append(f'    private {java_type} {field["java_field"]};')
+    return "\n".join(lines)
+
+
+def collect_save_vo_imports(
+    fields: list[dict[str, Any]], validation_package: str
+) -> list[str]:
+    """Collect validation annotation imports needed for SaveReqVO fields."""
+    imports: list[str] = []
+    has_not_null = False
+    has_not_empty = False
+    has_digits = False
+    has_size = False
+
+    for field in fields:
+        java_type = normalize_java_field_type(field)
+        if not field.get("nullable"):
+            if java_type == "String":
+                has_not_empty = True
+            else:
+                has_not_null = True
+        if java_type == "BigDecimal" and field.get("integer_digits") is not None:
+            has_digits = True
+        if java_type == "String" and field.get("max_length"):
+            has_size = True
+
+    if has_not_null:
+        imports.append(f"{validation_package}.constraints.NotNull")
+    if has_not_empty:
+        imports.append(f"{validation_package}.constraints.NotEmpty")
+    if has_digits:
+        imports.append(f"{validation_package}.constraints.Digits")
+    if has_size:
+        imports.append(f"{validation_package}.constraints.Size")
+    return imports
+
+
 def render_page_query_field(field: dict[str, Any]) -> str:
     java_type = normalize_java_field_type(field)
+    desc = escape_java_string(field["column_comment"])
     if java_type in {"LocalDateTime", "LocalDate"}:
         return (
-            f'    @Schema(description = "{escape_java_string(field["column_comment"])}范围")\n'
+            f'    @Schema(description = "{desc}范围")\n'
             f'    private {java_type}[] {field["java_field"]};'
         )
     return render_java_field(field)
@@ -1559,6 +1593,9 @@ def render_vben_form_field(field: dict[str, Any], frontend_plan: dict[str, Any])
     component_props = [f"placeholder: '请输入{sanitize_column_comment(field['column_comment'])}'"]
     if html_type == "textarea":
         component = "Textarea"
+    elif html_type == "editor":
+        component = "RichTextarea"
+        component_props = []
     elif html_type in {"datetime", "date"}:
         component = "DatePicker"
         component_props = [
@@ -1585,7 +1622,7 @@ def render_vben_form_field(field: dict[str, Any], frontend_plan: dict[str, Any])
             "optionType: 'button'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
         ]
     elif html_type in {"select", "radio"} and enum_options:
-        component = "RadioGroup" if html_type == "radio" else "Select"
+        component = "RadioGroup" if len(enum_options) <= 3 else "Select"
         component_props = [
             f"options: {render_vben_options_literal(enum_options)}",
             f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'" if component == "Select" else None,
@@ -1802,16 +1839,19 @@ def resolve_vben_dict_value_type(field: dict[str, Any]) -> str:
 
 
 def sanitize_column_comment(comment: str) -> str:
-    return re.split(r"[:：(（]", comment, maxsplit=1)[0].strip() or comment
+    cleaned = re.sub(r"[\r\n]+", " ", comment).strip()
+    return re.split(r"[:：(（]", cleaned, maxsplit=1)[0].strip() or cleaned
 
 
 def build_vben_inline_options(field: dict[str, Any]) -> list[dict[str, Any]]:
     if infer_vben_dict_type(field):
         return []
-    comment = str(field.get("column_comment") or "").strip()
-    if not comment or all(separator not in comment for separator in ("-", "：", ":", "，", ",")):
+    comment = re.sub(r"[\r\n]+", " ", str(field.get("column_comment") or "")).strip()
+    if not comment or (":" not in comment and "：" not in comment):
         return []
-    option_text = re.split(r"[:：]", comment, maxsplit=1)[-1].strip() if ":" in comment or "：" in comment else comment
+    option_text = re.split(r"[:：]", comment, maxsplit=1)[-1].strip()
+    if not re.search(r"\d+\s*[-=]\s*\S", option_text):
+        return []
     options: list[dict[str, Any]] = []
     for segment in re.split(r"[，,；;]", option_text):
         item = segment.strip()
@@ -1884,7 +1924,7 @@ def render_vben_option_key(value: str | int | bool) -> str:
 def resolve_vben_column_width(field: dict[str, Any]) -> int:
     if field["java_type"] == "LocalDateTime":
         return 180
-    if field["html_type"] in {"textarea"} or should_use_vben_tooltip(field):
+    if field["html_type"] in {"textarea", "editor"} or should_use_vben_tooltip(field):
         return 200
     if field["html_type"] in {"imageUpload", "image-upload"}:
         return 140
@@ -1892,7 +1932,7 @@ def resolve_vben_column_width(field: dict[str, Any]) -> int:
 
 
 def should_use_vben_tooltip(field: dict[str, Any]) -> bool:
-    return field["html_type"] in {"textarea"} or len(sanitize_column_comment(field["column_comment"])) >= 18
+    return field["html_type"] in {"textarea", "editor"} or len(sanitize_column_comment(field["column_comment"])) >= 18
 
 
 def resolve_vben_clear_prop_name(frontend_plan: dict[str, Any]) -> str:
@@ -1947,7 +1987,8 @@ def render_uniapp_detail_row(field: dict[str, Any]) -> str:
 
 
 def escape_java_string(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    s = value.replace("\\", "\\\\").replace('"', '\\"')
+    return re.sub(r"[\r\n]+", " ", s).strip()
 
 
 def escape_html_attr(value: str) -> str:

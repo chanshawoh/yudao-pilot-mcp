@@ -290,8 +290,15 @@ def generate_codegen_scaffold_tool(
     include_frontend: bool = True,
     write_files: bool = False,
     overwrite: bool = True,
+    field_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """根据当前上下文直接生成首版代码骨架，可选择只预览或直接写入工作区。"""
+    """根据当前上下文直接生成首版代码骨架，可选择只预览或直接写入工作区。
+
+    field_overrides: AI 覆盖字段组件类型，格式为 {"java_field": "html_type"}，
+    例如 {"lng": "inputNumber", "lat": "inputNumber"}。
+    可用 html_type 值: input, inputNumber, textarea, editor, select, radio,
+    checkbox, datetime, date, imageUpload, fileUpload。
+    """
     loaded = load_config_or_error(workspace_root)
     if isinstance(loaded, dict):
         return loaded
@@ -309,6 +316,8 @@ def generate_codegen_scaffold_tool(
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
     )
+    if field_overrides:
+        _apply_field_overrides(context, field_overrides)
     generated_files = generate_scaffold_files(
         context,
         overwrite=overwrite,
@@ -448,6 +457,15 @@ def generate_codegen_sql_tool(
             )
 
     if apply_menu_to_database:
+        menu_plan = sql_bundle.get("menu_plan", {})
+        if menu_plan.get("all_menus_exist"):
+            result["apply_result"] = {
+                "ok": True,
+                "skipped_reason": "all_menus_exist",
+                "message": "所有菜单已存在（根菜单、业务菜单、按钮权限），跳过数据库写入",
+            }
+            return success_response("菜单已存在，无需重复创建", result)
+
         database_result = resolve_database_config(root, config)
         result["database"] = database_result
         if not database_result.get("ok"):
@@ -634,6 +652,15 @@ def _enable_in_server_pom(pom_path: Path, artifact: str) -> None:
             1,
         )
         pom_path.write_text(text, encoding="utf-8")
+
+
+def _apply_field_overrides(context: dict[str, Any], overrides: dict[str, str]) -> None:
+    """Apply AI-provided html_type overrides to table schema columns."""
+    columns = context.get("table_schema", {}).get("columns", [])
+    for col in columns:
+        new_html_type = overrides.get(col.get("java_field", ""))
+        if new_html_type:
+            col["html_type"] = new_html_type
 
 
 def _create_module_scaffold(backend_root: Path, module_name: str) -> None:

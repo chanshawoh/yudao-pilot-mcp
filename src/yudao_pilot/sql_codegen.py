@@ -240,9 +240,16 @@ def build_menu_plan(
         "component_name": None,
         "lookup_paths": [f"/{context['module_name']}", context["module_name"]],
     }
+
+    resolved_business = find_existing_business_menu(
+        menus,
+        root_menu_id=coerce_int((resolved_root or {}).get("id")),
+        component_path=component_path,
+        menu_path=business_menu_path,
+    )
     business_menu = {
-        "id": None,
-        "exists": False,
+        "id": (resolved_business or {}).get("id"),
+        "exists": resolved_business is not None,
         "name": menu_label,
         "type": 2,
         "sort": 0,
@@ -252,10 +259,17 @@ def build_menu_plan(
         "component_name": context["generated_file_plan"]["simple_class_name"],
         "permission": "",
     }
+
+    existing_permissions = {
+        str(menu.get("permission") or "")
+        for menu in menus
+        if str(menu.get("permission") or "").strip()
+    }
     buttons = [
         {
             "name": f"{button_prefix_name}{button_name}",
             "permission": f"{permission_prefix}:{button_permission}",
+            "exists": f"{permission_prefix}:{button_permission}" in existing_permissions,
             "type": 3,
             "sort": index,
             "path": "",
@@ -265,6 +279,10 @@ def build_menu_plan(
         }
         for index, (button_name, button_permission) in enumerate(MENU_BUTTONS, start=1)
     ]
+
+    needs_create_root = resolved_root is None
+    needs_create_business = resolved_business is None
+    needs_create_buttons = any(not btn["exists"] for btn in buttons)
 
     return {
         "table_name": context["table_name"],
@@ -277,8 +295,30 @@ def build_menu_plan(
         "business_menu": business_menu,
         "buttons": buttons,
         "resolved_root_menu": resolved_root,
-        "needs_create_root_menu": resolved_root is None,
+        "needs_create_root_menu": needs_create_root,
+        "needs_create_business_menu": needs_create_business,
+        "needs_create_buttons": needs_create_buttons,
+        "all_menus_exist": not needs_create_root and not needs_create_business and not needs_create_buttons,
     }
+
+
+def find_existing_business_menu(
+    menus: list[dict[str, Any]],
+    *,
+    root_menu_id: int | None,
+    component_path: str,
+    menu_path: str,
+) -> dict[str, Any] | None:
+    """Check if a business menu already exists in the SQL dump by component or path."""
+    for menu in menus:
+        if menu.get("type") != 2:
+            continue
+        if str(menu.get("component") or "") == component_path:
+            return menu
+        if root_menu_id is not None and coerce_int(menu.get("parent_id")) == root_menu_id:
+            if normalize_menu_path(str(menu.get("path") or "")) == normalize_menu_path(menu_path):
+                return menu
+    return None
 
 
 def resolve_module_root_menu(
