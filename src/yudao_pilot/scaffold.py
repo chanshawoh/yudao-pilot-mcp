@@ -190,6 +190,8 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
     class_name = context["entity_name"]
     business_name = context["business_name"]
     module_name = context["module_name"]
+    table_name = context["table_name"]
+    url_path = table_name.replace("_", "-")
     resource_package = resolve_resource_package(context["backend_project"]["type"])
     validation_package = resolve_validation_package(context["backend_project"]["type"])
     base_package = context["backend_codegen_defaults"]["base_package"]
@@ -213,7 +215,7 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
         import static {base_package}.framework.common.pojo.CommonResult.success;
 
         @RestController
-        @RequestMapping("/{module_name}/{business_name}")
+        @RequestMapping("/{module_name}/{url_path}")
         @Validated
         public class {class_name}Controller {{
 
@@ -487,13 +489,14 @@ def render_frontend_api(
 ) -> str:
     project_type = frontend_plan["project_type"]
     module_name = context["module_name"]
-    business_name = context["business_name"]
     entity_name = context["entity_name"]
     lower_name = lower_camel(entity_name)
+    table_name = context["table_name"]
+    url_path = table_name.replace("_", "-")
     frontend_business_path = (
         frontend_plan.get("frontend_business_path")
         or context.get("generated_file_plan", {}).get("frontend_business_path")
-        or business_name
+        or context["business_name"]
     )
     ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
     if is_vben_codegen_type(project_type):
@@ -503,6 +506,7 @@ def render_frontend_api(
             entity_name=entity_name,
             entity_label=resolve_frontend_entity_label(context),
             fields=get_resp_fields(context),
+            url_path=url_path,
         )
     if is_uniapp_codegen_type(project_type):
         return dedent(
@@ -513,20 +517,20 @@ def render_frontend_api(
 
             export const get{entity_name}Page = (params: any) => {{
               return request.get({{
-                url: '/admin-api/{module_name}/{business_name}/page',
+                url: '/admin-api/{module_name}/{url_path}/page',
                 params,
               }})
             }}
 
             export const get{entity_name} = (id: number) => {{
               return request.get({{
-                url: '/admin-api/{module_name}/{business_name}/get?id=' + id,
+                url: '/admin-api/{module_name}/{url_path}/get?id=' + id,
               }})
             }}
 
             export const save{entity_name} = (data: {entity_name}VO) => {{
               return request.request({{
-                url: '/admin-api/{module_name}/{business_name}/' + (data.id ? 'update' : 'create'),
+                url: '/admin-api/{module_name}/{url_path}/' + (data.id ? 'update' : 'create'),
                 method: data.id ? 'PUT' : 'POST',
                 data,
               }})
@@ -534,7 +538,7 @@ def render_frontend_api(
 
             export const delete{entity_name} = (id: number) => {{
               return request.delete({{
-                url: '/admin-api/{module_name}/{business_name}/delete?id=' + id,
+                url: '/admin-api/{module_name}/{url_path}/delete?id=' + id,
               }})
             }}
             """
@@ -546,23 +550,23 @@ def render_frontend_api(
         {ts_interface}
 
         export const get{entity_name}Page = async (params: any) => {{
-          return await request.get({{ url: '/admin-api/{module_name}/{business_name}/page', params }})
+          return await request.get({{ url: '/admin-api/{module_name}/{url_path}/page', params }})
         }}
 
         export const get{entity_name} = async (id: number) => {{
-          return await request.get({{ url: '/admin-api/{module_name}/{business_name}/get', params: {{ id }} }})
+          return await request.get({{ url: '/admin-api/{module_name}/{url_path}/get', params: {{ id }} }})
         }}
 
         export const create{entity_name} = async (data: {entity_name}VO) => {{
-          return await request.post({{ url: '/admin-api/{module_name}/{business_name}/create', data }})
+          return await request.post({{ url: '/admin-api/{module_name}/{url_path}/create', data }})
         }}
 
         export const update{entity_name} = async (data: {entity_name}VO) => {{
-          return await request.put({{ url: '/admin-api/{module_name}/{business_name}/update', data }})
+          return await request.put({{ url: '/admin-api/{module_name}/{url_path}/update', data }})
         }}
 
         export const delete{entity_name} = async (id: number) => {{
-          return await request.delete({{ url: '/admin-api/{module_name}/{business_name}/delete', params: {{ id }} }})
+          return await request.delete({{ url: '/admin-api/{module_name}/{url_path}/delete', params: {{ id }} }})
         }}
 
         export const {lower_name}Permission = '{context["permission_prefix"]}'
@@ -577,10 +581,11 @@ def render_vben_api_file(
     entity_name: str,
     entity_label: str,
     fields: list[dict[str, Any]],
+    url_path: str = "",
 ) -> str:
     namespace = build_vben_api_namespace(entity_name)
     model_name = entity_name
-    base_url = f"/{module_name}/{frontend_business_path.replace('/', '_')}"
+    base_url = f"/{module_name}/{url_path}" if url_path else f"/{module_name}/{frontend_business_path.replace('/', '_')}"
     interface_body = render_vben_api_interface_body(fields)
     return (
         "\n".join(
@@ -1797,7 +1802,7 @@ def resolve_vben_dict_value_type(field: dict[str, Any]) -> str:
 
 
 def sanitize_column_comment(comment: str) -> str:
-    return re.split(r"[:：]", comment, maxsplit=1)[0].strip() or comment
+    return re.split(r"[:：(（]", comment, maxsplit=1)[0].strip() or comment
 
 
 def build_vben_inline_options(field: dict[str, Any]) -> list[dict[str, Any]]:

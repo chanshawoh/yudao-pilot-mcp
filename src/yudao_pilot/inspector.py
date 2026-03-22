@@ -648,3 +648,58 @@ def deduplicate_preserve_order(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+_TABLE_NAME_RE = re.compile(r'@TableName\(\s*"([^"]+)"\s*\)')
+
+
+@dataclass
+class ScannedTableEntity:
+    table_name: str
+    module_name: str
+    business_dir: str
+
+
+def scan_backend_table_entities(backend_root: Path) -> list[ScannedTableEntity]:
+    """Scan enabled modules for DO classes and extract @TableName mappings."""
+    backend_root = Path(backend_root).resolve()
+    enabled_modules = _parse_enabled_modules(backend_root)
+    results: list[ScannedTableEntity] = []
+    for module_dir_name in enabled_modules:
+        module_name = module_dir_name.removeprefix("yudao-module-")
+        do_base = (
+            backend_root / module_dir_name / "src" / "main" / "java"
+            / "cn" / "iocoder" / "yudao" / "module" / module_name
+            / "dal" / "dataobject"
+        )
+        if not do_base.is_dir():
+            continue
+        for do_file in do_base.rglob("*DO.java"):
+            table = _extract_table_name(do_file)
+            if not table:
+                continue
+            business_dir = do_file.parent.name if do_file.parent != do_base else module_name
+            results.append(ScannedTableEntity(
+                table_name=table,
+                module_name=module_name,
+                business_dir=business_dir,
+            ))
+    return results
+
+
+def _parse_enabled_modules(backend_root: Path) -> list[str]:
+    """Parse root pom.xml <modules> to find enabled yudao-module-* entries."""
+    root_pom = backend_root / "pom.xml"
+    if not root_pom.exists():
+        return []
+    facts = parse_pom(root_pom)
+    return [m for m in facts.modules if m.startswith("yudao-module-")]
+
+
+def _extract_table_name(do_file: Path) -> str | None:
+    try:
+        content = do_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    match = _TABLE_NAME_RE.search(content)
+    return match.group(1) if match else None

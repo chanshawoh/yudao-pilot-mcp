@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from .config import (
 from .database import resolve_database_config
 from .database import apply_menu_plan_to_database
 from .models import GeneratedFile, TableResolution
-from .inspector import inspect_project_path, validate_workspace_projects
+from .inspector import inspect_project_path, scan_backend_table_entities, validate_workspace_projects
 from .schema import inspect_table_schema
 from .scaffold import generate_scaffold_files
 from .sql_codegen import build_codegen_sql_bundle, write_codegen_sql_bundle
@@ -194,7 +195,8 @@ def infer_codegen_plan_tool(table_name: str, workspace_root: str | None = None) 
     if isinstance(loaded, dict):
         return loaded
     root, config = loaded
-    resolution = infer_table_resolution(table_name, config)
+    backend_root = (root / config.projects.backend.path).resolve()
+    resolution = infer_table_resolution(table_name, config, backend_root=backend_root)
 
     return success_response(
         "生成规划推导成功",
@@ -234,7 +236,8 @@ def inspect_codegen_context_tool(
     if isinstance(loaded, dict):
         return loaded
     root, config = loaded
-    resolution = infer_table_resolution(table_name, config)
+    backend_root = (root / config.projects.backend.path).resolve()
+    resolution = infer_table_resolution(table_name, config, backend_root=backend_root)
     context = build_codegen_context(
         root,
         config,
@@ -293,7 +296,8 @@ def generate_codegen_scaffold_tool(
     if isinstance(loaded, dict):
         return loaded
     root, config = loaded
-    resolution = infer_table_resolution(table_name, config)
+    backend_root = (root / config.projects.backend.path).resolve()
+    resolution = infer_table_resolution(table_name, config, backend_root=backend_root)
     context = build_codegen_context(
         root,
         config,
@@ -402,7 +406,8 @@ def generate_codegen_sql_tool(
     if isinstance(loaded, dict):
         return loaded
     root, config = loaded
-    resolution = infer_table_resolution(table_name, config)
+    backend_root = (root / config.projects.backend.path).resolve()
+    resolution = infer_table_resolution(table_name, config, backend_root=backend_root)
     context = build_codegen_context(
         root,
         config,
@@ -460,62 +465,278 @@ def generate_codegen_sql_tool(
     return success_response("代码生成 SQL 已准备完成", result)
 
 
-def infer_table_resolution(table_name: str, config: WorkspaceConfig) -> TableResolution:
-    if not config.codegen.manual_rules:
-        inferred_module = table_name.split("_", 1)[0] if "_" in table_name else "system"
+def infer_table_resolution(
+    table_name: str,
+    config: WorkspaceConfig,
+    *,
+    backend_root: Path | None = None,
+) -> TableResolution:
+    # 1) manual_rules exact match
+    if config.codegen.manual_rules:
+        for manual_rule in config.codegen.manual_rules:
+            for table_rule in manual_rule.table_rules:
+                if table_rule.table == table_name:
+                    return TableResolution(
+                        module=manual_rule.module,
+                        matched_by="exact",
+                        matched_table=table_rule.table,
+                        business=table_rule.business,
+                        entity=table_rule.entity,
+                    )
+
+        # 2) manual_rules prefix match
+        matched_prefix: str | None = None
+        prefix_module: str | None = None
+        for manual_rule in config.codegen.manual_rules:
+            for prefix in manual_rule.table_prefixes:
+                if table_name == prefix or table_name.startswith(f"{prefix}_"):
+                    matched_prefix = prefix
+                    prefix_module = manual_rule.module
+                    break
+            if matched_prefix:
+                break
+
+        if matched_prefix and prefix_module:
+            return TableResolution(
+                module=prefix_module,
+                matched_by="prefix",
+                matched_prefix=matched_prefix,
+                business=matched_prefix,
+                entity=snake_to_pascal(table_name),
+            )
+
+    # 3) scan existing DO entities in backend modules
+    if backend_root:
+        scan_result = _resolve_by_scan(table_name, backend_root)
+        if scan_result:
+            return scan_result
+
+    # 4) fallback: derive module from first segment, may trigger new module
+    inferred_module = table_name.split("_", 1)[0] if "_" in table_name else table_name
+    if backend_root:
+        module_dir = backend_root / f"yudao-module-{inferred_module}"
+        if module_dir.is_dir():
+            _ensure_module_enabled(backend_root, inferred_module)
+            return TableResolution(
+                module=inferred_module,
+                matched_by="new_module",
+                business=table_name,
+                entity=snake_to_pascal(table_name),
+            )
+        _create_module_scaffold(backend_root, inferred_module)
+        _ensure_module_enabled(backend_root, inferred_module)
         return TableResolution(
             module=inferred_module,
-            matched_by="fallback",
+            matched_by="new_module",
             business=table_name,
             entity=snake_to_pascal(table_name),
         )
 
-    for manual_rule in config.codegen.manual_rules:
-        for table_rule in manual_rule.table_rules:
-            if table_rule.table == table_name:
-                return TableResolution(
-                    module=manual_rule.module,
-                    matched_by="exact",
-                    matched_table=table_rule.table,
-                    business=table_rule.business,
-                    entity=table_rule.entity,
-                )
-
-    prefix_match: tuple[str, str] | None = None
-    prefix_module: str | None = None
-    for manual_rule in config.codegen.manual_rules:
-        for prefix in manual_rule.table_prefixes:
-            if table_name == prefix or table_name.startswith(f"{prefix}_"):
-                prefix_match = (prefix, trim_prefix(table_name, prefix))
-                prefix_module = manual_rule.module
-                break
-        if prefix_match:
-            break
-
-    if prefix_match and prefix_module:
-        matched_prefix, business = prefix_match
-        return TableResolution(
-            module=prefix_module,
-            matched_by="prefix",
-            matched_prefix=matched_prefix,
-            business=business,
-            entity=snake_to_pascal(table_name),
-        )
-
-    first_rule = config.codegen.manual_rules[0]
     return TableResolution(
-        module=first_rule.module,
+        module=inferred_module,
         matched_by="fallback",
         business=table_name,
         entity=snake_to_pascal(table_name),
     )
 
 
-def trim_prefix(table_name: str, prefix: str) -> str:
-    if table_name == prefix:
-        return prefix
-    trimmed = table_name[len(prefix):].lstrip("_")
-    return trimmed or prefix
+def _resolve_by_scan(table_name: str, backend_root: Path) -> TableResolution | None:
+    """Find the best matching existing DO table by longest prefix."""
+    entities = scan_backend_table_entities(backend_root)
+    best_match = None
+    best_len = 0
+    for entity in entities:
+        existing = entity.table_name
+        if table_name == existing:
+            return TableResolution(
+                module=entity.module_name,
+                matched_by="scan",
+                matched_table=existing,
+                business=entity.business_dir,
+                entity=snake_to_pascal(table_name),
+            )
+        if table_name.startswith(f"{existing}_") and len(existing) > best_len:
+            best_match = entity
+            best_len = len(existing)
+    if best_match:
+        return TableResolution(
+            module=best_match.module_name,
+            matched_by="scan",
+            matched_prefix=best_match.table_name,
+            business=best_match.business_dir,
+            entity=snake_to_pascal(table_name),
+        )
+    return None
+
+
+
+def _ensure_module_enabled(backend_root: Path, module_name: str) -> None:
+    """Uncomment or add module in root pom.xml and yudao-server/pom.xml."""
+    artifact = f"yudao-module-{module_name}"
+    _enable_in_root_pom(backend_root / "pom.xml", artifact)
+    _enable_in_server_pom(backend_root / "yudao-server" / "pom.xml", artifact)
+
+
+def _enable_in_root_pom(pom_path: Path, artifact: str) -> None:
+    if not pom_path.exists():
+        return
+    text = pom_path.read_text(encoding="utf-8")
+    module_tag = f"<module>{artifact}</module>"
+    commented = f"<!--        <module>{artifact}</module>-->"
+    alt_commented = f"<!--<module>{artifact}</module>-->"
+
+    if module_tag in text and commented not in text and alt_commented not in text:
+        return
+
+    for pattern in [commented, alt_commented]:
+        if pattern in text:
+            text = text.replace(pattern, f"        {module_tag}")
+            pom_path.write_text(text, encoding="utf-8")
+            return
+
+    insert_marker = "</modules>"
+    if insert_marker in text:
+        text = text.replace(insert_marker, f"        {module_tag}\n    {insert_marker}")
+        pom_path.write_text(text, encoding="utf-8")
+
+
+def _enable_in_server_pom(pom_path: Path, artifact: str) -> None:
+    if not pom_path.exists():
+        return
+    text = pom_path.read_text(encoding="utf-8")
+
+    dep_block = (
+        f"<dependency>\n"
+        f"            <groupId>cn.iocoder.boot</groupId>\n"
+        f"            <artifactId>{artifact}</artifactId>\n"
+        f"            <version>${{revision}}</version>\n"
+        f"        </dependency>"
+    )
+
+    if f"<artifactId>{artifact}</artifactId>" in text:
+        commented_pattern = re.compile(
+            r"<!--\s*<dependency>\s*.*?"
+            + re.escape(f"<artifactId>{artifact}</artifactId>")
+            + r".*?</dependency>\s*-->",
+            re.DOTALL,
+        )
+        match = commented_pattern.search(text)
+        if match:
+            text = text[:match.start()] + f"        {dep_block}" + text[match.end():]
+            pom_path.write_text(text, encoding="utf-8")
+        return
+
+    insert_marker = "</dependencies>"
+    if insert_marker in text:
+        text = text.replace(
+            insert_marker,
+            f"\n        {dep_block}\n\n    {insert_marker}",
+            1,
+        )
+        pom_path.write_text(text, encoding="utf-8")
+
+
+def _create_module_scaffold(backend_root: Path, module_name: str) -> None:
+    """Create a minimal module directory with pom.xml and standard package layout."""
+    module_root = backend_root / f"yudao-module-{module_name}"
+    module_root.mkdir(parents=True, exist_ok=True)
+
+    pkg_base = module_root / "src" / "main" / "java" / "cn" / "iocoder" / "yudao" / "module" / module_name
+    for sub in [
+        "controller/admin",
+        "dal/dataobject",
+        "dal/mysql",
+        "service",
+        "enums",
+    ]:
+        (pkg_base / sub).mkdir(parents=True, exist_ok=True)
+
+    (module_root / "src" / "main" / "resources" / "mapper").mkdir(parents=True, exist_ok=True)
+
+    test_sql_dir = module_root / "src" / "test" / "resources" / "sql"
+    test_sql_dir.mkdir(parents=True, exist_ok=True)
+    for sql_file in ["create_tables.sql", "clean.sql"]:
+        sql_path = test_sql_dir / sql_file
+        if not sql_path.exists():
+            sql_path.write_text("", encoding="utf-8")
+
+    error_code_path = pkg_base / "enums" / "ErrorCodeConstants.java"
+    if not error_code_path.exists():
+        error_code_path.write_text(
+            f"package cn.iocoder.yudao.module.{module_name}.enums;\n\n"
+            f"import cn.iocoder.yudao.framework.common.exception.ErrorCode;\n\n"
+            f"public interface ErrorCodeConstants {{\n\n}}\n",
+            encoding="utf-8",
+        )
+
+    pom_path = module_root / "pom.xml"
+    if not pom_path.exists():
+        pom_path.write_text(
+            _render_module_pom(module_name),
+            encoding="utf-8",
+        )
+
+
+def _render_module_pom(module_name: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<project xmlns="http://maven.apache.org/POM/4.0.0"\n'
+        '         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n'
+        '         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 '
+        'http://maven.apache.org/xsd/maven-4.0.0.xsd">\n'
+        "    <parent>\n"
+        "        <groupId>cn.iocoder.boot</groupId>\n"
+        "        <artifactId>yudao</artifactId>\n"
+        "        <version>${revision}</version>\n"
+        "    </parent>\n"
+        "    <modelVersion>4.0.0</modelVersion>\n"
+        f"    <artifactId>yudao-module-{module_name}</artifactId>\n"
+        "    <packaging>jar</packaging>\n\n"
+        "    <name>${project.artifactId}</name>\n"
+        f"    <description>{module_name} 模块</description>\n\n"
+        "    <dependencies>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-module-system</artifactId>\n"
+        "            <version>${revision}</version>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-module-infra</artifactId>\n"
+        "            <version>${revision}</version>\n"
+        "        </dependency>\n\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-biz-tenant</artifactId>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-security</artifactId>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>org.springframework.boot</groupId>\n"
+        "            <artifactId>spring-boot-starter-validation</artifactId>\n"
+        "        </dependency>\n\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-mybatis</artifactId>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-redis</artifactId>\n"
+        "        </dependency>\n\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-test</artifactId>\n"
+        "            <scope>test</scope>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-excel</artifactId>\n"
+        "        </dependency>\n"
+        "    </dependencies>\n\n"
+        "</project>\n"
+    )
 
 
 def snake_to_pascal(value: str) -> str:

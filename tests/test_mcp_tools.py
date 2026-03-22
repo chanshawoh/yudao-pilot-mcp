@@ -7,12 +7,17 @@ import yaml
 
 from yudao_pilot import schema as schema_module
 from yudao_pilot.database import apply_menu_plan_to_database
+from yudao_pilot.inspector import scan_backend_table_entities
 from yudao_pilot.server import (
     generate_codegen_scaffold_tool,
     generate_codegen_sql_tool,
+    infer_table_resolution,
     inspect_codegen_context_tool,
     inspect_table_schema_tool,
     resolve_database_config_tool,
+    snake_to_pascal,
+    _create_module_scaffold,
+    _ensure_module_enabled,
 )
 from yudao_pilot.sql_codegen import merge_sql_snippet
 
@@ -1179,3 +1184,188 @@ def test_apply_menu_plan_to_database_updates_existing_menu_icon(monkeypatch) -> 
         and params == ("ep:shop", "yudao-pilot", 6001)
         for sql, params in statements
     )
+
+
+# ---------------------------------------------------------------------------
+# scan_backend_table_entities
+# ---------------------------------------------------------------------------
+
+def test_scan_backend_table_entities_finds_do_files(repo_root: Path) -> None:
+    backend_root = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"
+    entities = scan_backend_table_entities(backend_root)
+    table_names = {e.table_name for e in entities}
+    assert "merchant" in table_names
+    merchant = next(e for e in entities if e.table_name == "merchant")
+    assert merchant.module_name == "member"
+    assert merchant.business_dir == "merchant"
+
+
+def test_scan_backend_table_entities_empty_on_missing_dir(tmp_path: Path) -> None:
+    assert scan_backend_table_entities(tmp_path / "nonexistent") == []
+
+
+# ---------------------------------------------------------------------------
+# infer_table_resolution with backend_root (scan mode)
+# ---------------------------------------------------------------------------
+
+def test_infer_resolution_manual_exact_still_wins(workspace_builder, repo_root: Path) -> None:
+    from yudao_pilot.config import load_workspace_config
+    ws = workspace_builder()
+    config = load_workspace_config(ws)
+    backend_root = (repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17")
+    r = infer_table_resolution("merchant", config, backend_root=backend_root)
+    assert r.matched_by == "exact"
+    assert r.module == "member"
+
+
+def test_infer_resolution_manual_prefix_still_wins(workspace_builder, repo_root: Path) -> None:
+    from yudao_pilot.config import load_workspace_config
+    ws = workspace_builder()
+    config = load_workspace_config(ws)
+    backend_root = (repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17")
+    r = infer_table_resolution("merchant_account", config, backend_root=backend_root)
+    assert r.matched_by == "prefix"
+    assert r.module == "member"
+    assert r.business == "merchant"
+
+
+def test_infer_resolution_scan_matches_existing_do(workspace_builder, repo_root: Path) -> None:
+    from yudao_pilot.config import load_workspace_config
+    ws = workspace_builder(
+        manual_rules_yaml="""\
+- module: member
+  table_prefixes: []
+  table_rules: []
+""",
+    )
+    config = load_workspace_config(ws)
+    backend_root = (repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17")
+    r = infer_table_resolution("system_notice_template", config, backend_root=backend_root)
+    assert r.matched_by == "scan"
+    assert r.module == "system"
+
+
+def test_infer_resolution_no_backend_root_falls_back(workspace_builder) -> None:
+    from yudao_pilot.config import load_workspace_config
+    ws = workspace_builder(
+        manual_rules_yaml="""\
+- module: member
+  table_prefixes: []
+  table_rules: []
+""",
+    )
+    config = load_workspace_config(ws)
+    r = infer_table_resolution("completely_unknown_table", config)
+    assert r.matched_by == "fallback"
+    assert r.module == "completely"
+
+
+# ---------------------------------------------------------------------------
+# New module creation
+# ---------------------------------------------------------------------------
+
+def test_create_module_scaffold(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    backend_root.mkdir()
+    _create_module_scaffold(backend_root, "order")
+    module_root = backend_root / "yudao-module-order"
+    assert module_root.is_dir()
+    assert (module_root / "pom.xml").exists()
+    pom_content = (module_root / "pom.xml").read_text()
+    assert "yudao-module-order" in pom_content
+    assert (module_root / "src" / "main" / "java" / "cn" / "iocoder" / "yudao" / "module" / "order" / "enums" / "ErrorCodeConstants.java").exists()
+    assert (module_root / "src" / "main" / "resources" / "mapper").is_dir()
+    assert (module_root / "src" / "test" / "resources" / "sql" / "create_tables.sql").exists()
+
+
+def test_ensure_module_enabled_uncomments_root_pom(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    backend_root.mkdir()
+    (backend_root / "yudao-server").mkdir()
+
+    root_pom = backend_root / "pom.xml"
+    root_pom.write_text(
+        "<project>\n"
+        "    <modules>\n"
+        "        <module>yudao-module-system</module>\n"
+        "<!--        <module>yudao-module-crm</module>-->\n"
+        "    </modules>\n"
+        "</project>\n",
+        encoding="utf-8",
+    )
+    server_pom = backend_root / "yudao-server" / "pom.xml"
+    server_pom.write_text(
+        "<project>\n"
+        "    <dependencies>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-module-system</artifactId>\n"
+        "            <version>${revision}</version>\n"
+        "        </dependency>\n"
+        "    </dependencies>\n"
+        "</project>\n",
+        encoding="utf-8",
+    )
+
+    _ensure_module_enabled(backend_root, "crm")
+
+    assert "<!--" not in root_pom.read_text()
+    assert "<module>yudao-module-crm</module>" in root_pom.read_text()
+    assert "<artifactId>yudao-module-crm</artifactId>" in server_pom.read_text()
+
+
+def test_ensure_module_enabled_adds_new_module(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    backend_root.mkdir()
+    (backend_root / "yudao-server").mkdir()
+
+    root_pom = backend_root / "pom.xml"
+    root_pom.write_text(
+        "<project>\n"
+        "    <modules>\n"
+        "        <module>yudao-module-system</module>\n"
+        "    </modules>\n"
+        "</project>\n",
+        encoding="utf-8",
+    )
+    server_pom = backend_root / "yudao-server" / "pom.xml"
+    server_pom.write_text(
+        "<project>\n"
+        "    <dependencies>\n"
+        "    </dependencies>\n"
+        "</project>\n",
+        encoding="utf-8",
+    )
+
+    _ensure_module_enabled(backend_root, "logistics")
+
+    assert "<module>yudao-module-logistics</module>" in root_pom.read_text()
+    assert "<artifactId>yudao-module-logistics</artifactId>" in server_pom.read_text()
+
+
+def test_infer_resolution_new_module_creates_scaffold(workspace_builder, tmp_path: Path) -> None:
+    from yudao_pilot.config import load_workspace_config
+
+    backend_root = tmp_path / "fake-backend"
+    backend_root.mkdir()
+    (backend_root / "yudao-server").mkdir()
+    (backend_root / "pom.xml").write_text(
+        "<project><modules></modules></project>", encoding="utf-8"
+    )
+    (backend_root / "yudao-server" / "pom.xml").write_text(
+        "<project><dependencies></dependencies></project>", encoding="utf-8"
+    )
+
+    ws = workspace_builder(
+        manual_rules_yaml="""\
+- module: member
+  table_prefixes: []
+  table_rules: []
+""",
+    )
+    config = load_workspace_config(ws)
+    r = infer_table_resolution("logistics_order", config, backend_root=backend_root)
+    assert r.matched_by == "new_module"
+    assert r.module == "logistics"
+    assert (backend_root / "yudao-module-logistics" / "pom.xml").exists()
+    assert "<module>yudao-module-logistics</module>" in (backend_root / "pom.xml").read_text()

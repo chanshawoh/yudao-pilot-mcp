@@ -93,7 +93,7 @@ class ProjectValidation(BaseModel):
 
 class TableResolution(BaseModel):
     module: str
-    matched_by: Literal["exact", "prefix", "fallback"]
+    matched_by: Literal["exact", "prefix", "scan", "new_module", "fallback"]
     matched_table: str | None = None
     matched_prefix: str | None = None
     business: str
