@@ -78,6 +78,8 @@ def test_inspect_codegen_context_contains_schema_and_plan(workspace_builder) -> 
     assert "table_schema" in data
     assert "generated_file_plan" in data
     assert data["migration_plan"]["directory"].endswith("/sql/mysql/migrations")
+    assert data.get("codegen_sql", {}).get("menu_mode") == "auto"
+    assert data.get("codegen_sql", {}).get("dict_mode") == "auto"
     assert all("yudao-module-member/src/" in path for path in data["generated_file_plan"]["backend"])
     assert all("yudao-module-member-server/" not in path for path in data["generated_file_plan"]["backend"])
 
@@ -803,6 +805,56 @@ def test_generate_codegen_sql_tool_contains_mysql_and_h2_plan(
     )
     assert 'CREATE TABLE IF NOT EXISTS "member_user"' in sql_bundle["h2"]["create_sql"]
     assert 'DELETE FROM "member_user";' in sql_bundle["h2"]["clean_sql"]
+
+
+def test_generate_codegen_sql_tool_menu_sql_mode_disabled(workspace_builder, monkeypatch) -> None:
+    workspace_root = workspace_builder()
+    config_path = workspace_root / ".yudao-pilot" / "config.yaml"
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_config["codegen"]["menu_sql_mode"] = "disabled"
+    config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "member_user",
+        "table_comment": "会员用户",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool("member_user", str(workspace_root))
+
+    assert result["ok"] is True
+    sql_bundle = result["data"]["sql_bundle"]
+    assert sql_bundle["menu_plan"]["disabled"] is True
+    assert "INSERT INTO system_menu" not in sql_bundle["mysql"]["content"]
+    assert sql_bundle["codegen_sql_modes"]["menu"] == "disabled"
 
 
 def test_generate_codegen_sql_tool_creates_root_menu_when_missing(

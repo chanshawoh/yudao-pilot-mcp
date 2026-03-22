@@ -428,6 +428,108 @@ def build_ai_component_hints(columns: list[dict[str, Any]]) -> list[dict[str, An
     return undetermined
 
 
+def extract_dict_fields(
+    columns: list[dict[str, Any]],
+    table_name: str,
+    table_comment: str,
+) -> list[dict[str, Any]]:
+    """Detect columns whose comments contain enum-like patterns (e.g. '状态: 0-开启, 1-禁用')
+    and return a structured dict plan for each."""
+    dict_fields: list[dict[str, Any]] = []
+    biz_label = _normalize_table_comment_for_dict(table_comment)
+
+    for col in columns:
+        if col.get("is_base_column") or col.get("primary_key"):
+            continue
+        comment = re.sub(r"[\r\n]+", " ", str(col.get("column_comment") or "")).strip()
+        if not comment:
+            continue
+        options = _parse_dict_options_from_comment(comment)
+        if not options:
+            continue
+
+        field_label = _sanitize_dict_field_label(comment)
+        dict_type_key = f"{table_name}_{col['column_name']}"
+        dict_type_name = f"{biz_label}{field_label}"
+        ts_type = col.get("ts_type", "string")
+
+        for idx, opt in enumerate(options):
+            opt["sort"] = idx
+            opt["color_type"] = _infer_dict_color_type(opt["label"], idx, len(options))
+            opt["value"] = str(opt["value"])
+
+        dict_fields.append({
+            "column_name": col["column_name"],
+            "java_field": col["java_field"],
+            "dict_type": dict_type_key,
+            "dict_name": dict_type_name,
+            "ts_type": ts_type,
+            "items": options,
+        })
+    return dict_fields
+
+
+def _normalize_table_comment_for_dict(table_comment: str) -> str:
+    """Strip common table-comment suffixes to derive a clean business label."""
+    cleaned = table_comment.strip()
+    for suffix in ("基础信息表", "信息表", "数据表", "记录表", "表", "基础信息", "信息"):
+        if cleaned.endswith(suffix) and len(cleaned) > len(suffix):
+            cleaned = cleaned[: -len(suffix)].strip()
+            break
+    return cleaned
+
+
+def _sanitize_dict_field_label(comment: str) -> str:
+    """Extract the short field label from a comment like '状态: 0-开启, 1-禁用' → '状态'."""
+    cleaned = re.sub(r"[\r\n]+", " ", comment).strip()
+    return re.split(r"[:：(（]", cleaned, maxsplit=1)[0].strip() or cleaned
+
+
+def _parse_dict_options_from_comment(comment: str) -> list[dict[str, Any]]:
+    """Parse 'value-label' pairs from comments like '状态: 0-开启, 1-禁用' or '类型（1-酒店, 2-民宿）'."""
+    delim_match = re.search(r"[:：(（]", comment)
+    if not delim_match:
+        return []
+    option_text = comment[delim_match.end():].rstrip(")）").strip()
+    if not re.search(r"\d+\s*[-=]\s*\S", option_text):
+        return []
+    options: list[dict[str, Any]] = []
+    for segment in re.split(r"[，,；;\s]+", option_text):
+        item = segment.strip()
+        if not item:
+            continue
+        match = re.match(r"(?P<value>[^-=:：\s]+)\s*[-=:：]\s*(?P<label>.+)", item)
+        if not match:
+            return []
+        options.append({
+            "value": match.group("value").strip(),
+            "label": match.group("label").strip(),
+        })
+    return options if options else []
+
+
+_SUCCESS_LABELS = {"开启", "启用", "正常", "成功", "是", "通过", "完成", "有效", "上架", "已支付", "已完成", "显示", "生效"}
+_DANGER_LABELS = {"关闭", "禁用", "停用", "失败", "否", "拒绝", "无效", "下架", "已取消", "隐藏", "作废", "删除"}
+_WARNING_LABELS = {"待处理", "进行中", "审核中", "处理中", "待审核", "待支付", "待发货", "未开始", "草稿"}
+_INFO_LABELS = {"未知", "默认", "其他", "其它"}
+
+
+def _infer_dict_color_type(label: str, index: int, total: int) -> str:
+    if label in _SUCCESS_LABELS:
+        return "success"
+    if label in _DANGER_LABELS:
+        return "danger"
+    if label in _WARNING_LABELS:
+        return "warning"
+    if label in _INFO_LABELS:
+        return "info"
+    if index == 0 and total <= 3:
+        return "primary"
+    if index == 1 and total <= 3:
+        return "success"
+    return "default"
+
+
 def snake_to_camel(value: str) -> str:
     parts = [part for part in value.split("_") if part]
     if not parts:

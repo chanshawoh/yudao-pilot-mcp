@@ -19,10 +19,10 @@ from .config import (
     load_workspace_config_file,
 )
 from .database import resolve_database_config
-from .database import apply_menu_plan_to_database
+from .database import apply_menu_plan_to_database, apply_dict_plan_to_database
 from .models import GeneratedFile, TableResolution
 from .inspector import inspect_project_path, scan_backend_table_entities, validate_workspace_projects
-from .schema import inspect_table_schema
+from .schema import extract_dict_fields, inspect_table_schema
 from .scaffold import generate_scaffold_files
 from .sql_codegen import build_codegen_sql_bundle, write_codegen_sql_bundle
 from .writer import write_generated_files
@@ -63,6 +63,39 @@ def error_response(
         "message": message,
         "data": data or {},
     }
+
+
+def _describe_menu_apply_skip(menu_mode: str, menu_plan: dict[str, Any]) -> str:
+    if menu_plan.get("disabled"):
+        return "菜单 SQL 已在配置中禁用，跳过写库"
+    if menu_mode == "migration_only":
+        return "菜单为 migration_only 模式，仅迁移文件、不写库"
+    if menu_plan.get("all_menus_exist"):
+        return "所有菜单已存在，跳过菜单写库"
+    return "跳过菜单写库"
+
+
+def _describe_dict_apply_skip(dict_mode: str, dict_plan: dict[str, Any]) -> str:
+    if dict_plan.get("disabled"):
+        return "字典 SQL 已在配置中禁用"
+    if dict_mode == "migration_only":
+        return "字典为 migration_only 模式，仅迁移文件、不写库"
+    if not dict_plan.get("has_dicts"):
+        return "未检测到需生成的字典数据"
+    return "跳过字典写库"
+
+
+def _describe_sql_apply_skip(
+    menu_mode: str,
+    dict_mode: str,
+    menu_plan: dict[str, Any],
+    dict_plan: dict[str, Any],
+) -> str:
+    parts = [
+        _describe_menu_apply_skip(menu_mode, menu_plan),
+        _describe_dict_apply_skip(dict_mode, dict_plan),
+    ]
+    return "；".join(parts)
 
 
 def load_config_or_error(
@@ -318,6 +351,7 @@ def generate_codegen_scaffold_tool(
     )
     if field_overrides:
         _apply_field_overrides(context, field_overrides)
+    _attach_generated_dict_types(context)
     generated_files = generate_scaffold_files(
         context,
         overwrite=overwrite,
@@ -410,7 +444,13 @@ def generate_codegen_sql_tool(
     overwrite: bool = False,
     apply_menu_to_database: bool = False,
 ) -> dict[str, Any]:
-    """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件并执行菜单数据。"""
+    """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件并执行菜单数据。
+
+    菜单/字典是否生成、是否允许写库由工作区配置 codegen.menu_sql_mode、codegen.dict_sql_mode 控制：
+    auto（默认）= 生成 SQL，write_files 写迁移；apply_menu_to_database 时可写库；
+    migration_only = 生成 SQL 并可写迁移文件，但永不写库；
+    disabled = 不生成对应 SQL（不写迁移中的该段）。
+    """
     loaded = load_config_or_error(workspace_root)
     if isinstance(loaded, dict):
         return loaded
@@ -457,14 +497,32 @@ def generate_codegen_sql_tool(
             )
 
     if apply_menu_to_database:
+        codegen_sql = context.get("codegen_sql", {})
+        menu_mode = str(codegen_sql.get("menu_mode") or "auto")
+        dict_mode = str(codegen_sql.get("dict_mode") or "auto")
         menu_plan = sql_bundle.get("menu_plan", {})
-        if menu_plan.get("all_menus_exist"):
+        dict_plan = sql_bundle.get("dict_plan", {})
+
+        apply_menu_allowed = menu_mode == "auto" and not menu_plan.get("disabled")
+        apply_dict_allowed = dict_mode == "auto" and not dict_plan.get("disabled")
+
+        menu_needs_db = apply_menu_allowed and not menu_plan.get("all_menus_exist", False)
+        dict_needs_db = (
+            apply_dict_allowed
+            and bool(dict_plan.get("has_dicts"))
+            and not bool(dict_plan.get("all_complete", False))
+        )
+
+        if not menu_needs_db and not dict_needs_db:
             result["apply_result"] = {
                 "ok": True,
-                "skipped_reason": "all_menus_exist",
-                "message": "所有菜单已存在（根菜单、业务菜单、按钮权限），跳过数据库写入",
+                "skipped_reason": "no_database_apply_needed",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": _describe_sql_apply_skip(
+                    menu_mode, dict_mode, menu_plan, dict_plan
+                ),
             }
-            return success_response("菜单已存在，无需重复创建", result)
+            return success_response("无需向数据库写入菜单或字典", result)
 
         database_result = resolve_database_config(root, config)
         result["database"] = database_result
@@ -474,11 +532,39 @@ def generate_codegen_sql_tool(
                 database_result["message"],
                 result,
             )
-        apply_result = apply_menu_plan_to_database(
-            database_result["database"],
-            sql_bundle["menu_plan"],
-        )
-        result["apply_result"] = apply_result
+
+        if menu_needs_db:
+            result["apply_result"] = apply_menu_plan_to_database(
+                database_result["database"],
+                menu_plan,
+            )
+        else:
+            result["apply_result"] = {
+                "ok": True,
+                "skipped_reason": "menu_skipped",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": _describe_menu_apply_skip(menu_mode, menu_plan),
+            }
+
+        if dict_needs_db:
+            result["dict_apply_result"] = apply_dict_plan_to_database(
+                database_result["database"],
+                dict_plan,
+            )
+        elif dict_plan.get("has_dicts"):
+            result["dict_apply_result"] = {
+                "ok": True,
+                "skipped_reason": "all_dicts_complete",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": "所有字典数据已存在且完整，跳过字典创建",
+            }
+        else:
+            result["dict_apply_result"] = {
+                "ok": True,
+                "skipped_reason": "dict_skipped",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": _describe_dict_apply_skip(dict_mode, dict_plan),
+            }
 
     return success_response("代码生成 SQL 已准备完成", result)
 
@@ -652,6 +738,24 @@ def _enable_in_server_pom(pom_path: Path, artifact: str) -> None:
             1,
         )
         pom_path.write_text(text, encoding="utf-8")
+
+
+def _attach_generated_dict_types(context: dict[str, Any]) -> None:
+    """Detect dict-like columns and attach generated_dict_type to each column."""
+    table_schema = context.get("table_schema") or {}
+    columns = table_schema.get("columns") or []
+    table_name = context.get("table_name", "")
+    table_comment = str(table_schema.get("table_comment") or table_name)
+    dict_fields = extract_dict_fields(columns, table_name, table_comment)
+    if not dict_fields:
+        return
+    dict_map = {df["column_name"]: df for df in dict_fields}
+    for col in columns:
+        df = dict_map.get(col["column_name"])
+        if df:
+            col["generated_dict_type"] = df["dict_type"]
+            col["generated_dict_name"] = df["dict_name"]
+            col["generated_dict_items"] = df["items"]
 
 
 def _apply_field_overrides(context: dict[str, Any], overrides: dict[str, str]) -> None:

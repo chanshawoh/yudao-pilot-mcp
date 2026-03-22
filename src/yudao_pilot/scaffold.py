@@ -1025,11 +1025,13 @@ def render_vben_data(
     form_fields = get_frontend_save_fields(context)
     query_fields = get_frontend_query_fields(context)
     list_fields = get_frontend_list_fields(context)
-    dict_types = collect_vben_dict_types(form_fields + query_fields + list_fields)
+    all_fields = form_fields + query_fields + list_fields
+    dict_types = collect_vben_dict_types(all_fields)
     needs_common_status_enum = any(
         should_use_vben_common_status_default(field) for field in form_fields
     )
-    needs_dict_options = bool(dict_types)
+    needs_dict_type_const = bool(dict_types)
+    needs_get_dict_options = needs_vben_get_dict_options(all_fields)
     needs_range_picker_default_props = any(
         is_vben_range_picker_field(field) for field in query_fields
     )
@@ -1041,12 +1043,12 @@ def render_vben_data(
     constant_names: list[str] = []
     if needs_common_status_enum:
         constant_names.append("CommonStatusEnum")
-    if needs_dict_options:
+    if needs_dict_type_const:
         constant_names.append("DICT_TYPE")
     if constant_names:
         import_lines.append("")
         import_lines.append(f"import {{ {', '.join(constant_names)} }} from '@vben/constants';")
-    if needs_dict_options:
+    if needs_get_dict_options:
         import_lines.append("import { getDictOptions } from '@vben/hooks';")
     extra_imports: list[str] = []
     if needs_common_status_enum:
@@ -1525,16 +1527,22 @@ def render_vben_column(field: dict[str, Any]) -> str:
     if field["java_type"] == "LocalDateTime":
         lines.append("  formatter: 'formatDateTime',")
     else:
-        dict_type = infer_vben_dict_type(field)
-        if dict_type:
-            lines.extend(
-                [
-                    "  cellRender: {",
-                    "    name: 'CellDict',",
-                    f"    props: {{ type: DICT_TYPE.{dict_type} }},",
-                    "  },",
-                ]
-            )
+        system_dict = infer_vben_dict_type(field)
+        generated_dict = infer_vben_generated_dict_type(field)
+        if system_dict:
+            lines.extend([
+                "  cellRender: {",
+                "    name: 'CellDict',",
+                f"    props: {{ type: DICT_TYPE.{system_dict} }},",
+                "  },",
+            ])
+        elif generated_dict:
+            lines.extend([
+                "  cellRender: {",
+                "    name: 'CellDict',",
+                f"    props: {{ type: '{generated_dict}' }},",
+                "  },",
+            ])
         else:
             lines.extend(build_vben_enum_formatter_lines(field))
     if should_use_vben_tooltip(field):
@@ -1546,19 +1554,17 @@ def render_vben_column(field: dict[str, Any]) -> str:
 def render_vben_search_field(field: dict[str, Any], frontend_plan: dict[str, Any]) -> str:
     clear_prop = resolve_vben_clear_prop_name(frontend_plan)
     component = "RangePicker" if is_vben_range_picker_field(field) else "Input"
-    dict_type = infer_vben_dict_type(field)
+    dict_options_expr = render_vben_dict_options_expr(field)
     enum_options = build_vben_inline_options(field)
-    if field["html_type"] in {"select", "radio", "checkbox"} or dict_type or enum_options:
+    if field["html_type"] in {"select", "radio", "checkbox"} or dict_options_expr or enum_options:
         component = "Select"
     component_props: list[str] = []
     if component == "RangePicker":
         component_props.append("...getRangePickerDefaultProps()")
         component_props.append(f"{clear_prop}: true")
     elif component == "Select":
-        if dict_type:
-            component_props.append(
-                f"options: getDictOptions(DICT_TYPE.{dict_type}, '{resolve_vben_dict_value_type(field)}')"
-            )
+        if dict_options_expr:
+            component_props.append(f"options: {dict_options_expr}")
         elif enum_options:
             component_props.append(f"options: {render_vben_options_literal(enum_options)}")
         else:
@@ -1588,7 +1594,7 @@ def render_vben_search_field(field: dict[str, Any], frontend_plan: dict[str, Any
 def render_vben_form_field(field: dict[str, Any], frontend_plan: dict[str, Any]) -> str:
     html_type = field["html_type"]
     component = "Input"
-    dict_type = infer_vben_dict_type(field)
+    dict_options_expr = render_vben_dict_options_expr(field)
     enum_options = build_vben_inline_options(field)
     component_props = [f"placeholder: '请输入{sanitize_column_comment(field['column_comment'])}'"]
     if html_type == "textarea":
@@ -1613,10 +1619,10 @@ def render_vben_form_field(field: dict[str, Any], frontend_plan: dict[str, Any])
             "class: '!w-full'" if resolve_vben_clear_prop_name(frontend_plan) == "clearable" else None,
             "controlsPosition: 'right'" if resolve_vben_clear_prop_name(frontend_plan) == "clearable" else None,
         ]
-    elif html_type in {"select", "radio"} and dict_type:
+    elif html_type in {"select", "radio"} and dict_options_expr:
         component = "RadioGroup" if html_type == "radio" else "Select"
         component_props = [
-            f"options: getDictOptions(DICT_TYPE.{dict_type}, '{resolve_vben_dict_value_type(field)}')",
+            f"options: {dict_options_expr}",
             f"placeholder: '请选择{sanitize_column_comment(field['column_comment'])}'" if component == "Select" else None,
             "buttonStyle: 'solid'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
             "optionType: 'button'" if component == "RadioGroup" and resolve_vben_clear_prop_name(frontend_plan) == "allowClear" else None,
@@ -1813,6 +1819,7 @@ def should_render_frontend_query_field(field: dict[str, Any]) -> bool:
 
 
 def infer_vben_dict_type(field: dict[str, Any]) -> str | None:
+    """Return a DICT_TYPE constant name for system dicts, or None."""
     java_field = field["java_field"]
     if java_field == "status":
         return "COMMON_STATUS"
@@ -1821,13 +1828,47 @@ def infer_vben_dict_type(field: dict[str, Any]) -> str | None:
     return None
 
 
+def infer_vben_generated_dict_type(field: dict[str, Any]) -> str | None:
+    """Return the generated dict_type string (e.g. 'hotel_info_star_rating')
+    if this column has auto-detected dict data, and no system dict matches."""
+    if infer_vben_dict_type(field):
+        return None
+    return field.get("generated_dict_type")
+
+
+def has_any_dict(field: dict[str, Any]) -> bool:
+    """True if the field has either a system dict or a generated dict."""
+    return bool(infer_vben_dict_type(field) or infer_vben_generated_dict_type(field))
+
+
+def render_vben_dict_options_expr(field: dict[str, Any]) -> str | None:
+    """Render the getDictOptions(...) expression for a field, handling both system and generated dicts."""
+    system_dict = infer_vben_dict_type(field)
+    generated_dict = infer_vben_generated_dict_type(field)
+    value_type = resolve_vben_dict_value_type(field)
+    if system_dict:
+        return f"getDictOptions(DICT_TYPE.{system_dict}, '{value_type}')"
+    if generated_dict:
+        return f"getDictOptions('{generated_dict}', '{value_type}')"
+    return None
+
+
 def collect_vben_dict_types(fields: list[dict[str, Any]]) -> list[str]:
+    """Collect system DICT_TYPE constant names used across all fields."""
     result: list[str] = []
     for field in fields:
         dict_type = infer_vben_dict_type(field)
         if dict_type and dict_type not in result:
             result.append(dict_type)
     return result
+
+
+def needs_vben_get_dict_options(fields: list[dict[str, Any]]) -> bool:
+    """True if any field references dict options (system or generated)."""
+    for field in fields:
+        if infer_vben_dict_type(field) or infer_vben_generated_dict_type(field):
+            return True
+    return False
 
 
 def resolve_vben_dict_value_type(field: dict[str, Any]) -> str:
@@ -1844,7 +1885,7 @@ def sanitize_column_comment(comment: str) -> str:
 
 
 def build_vben_inline_options(field: dict[str, Any]) -> list[dict[str, Any]]:
-    if infer_vben_dict_type(field):
+    if infer_vben_dict_type(field) or infer_vben_generated_dict_type(field):
         return []
     comment = re.sub(r"[\r\n]+", " ", str(field.get("column_comment") or "")).strip()
     if not comment or (":" not in comment and "：" not in comment):

@@ -6,7 +6,7 @@ from textwrap import dedent
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .models import DatabaseConfig, FrontendType, RoutingMode, WorkspaceConfigFile
+from .models import DatabaseConfig, FrontendType, RoutingMode, SqlAssetMode, WorkspaceConfigFile
 
 
 CONFIG_DIR_NAME = ".yudao-pilot"
@@ -73,6 +73,8 @@ class RoutingConfig(BaseModel):
 class CodegenConfig(BaseModel):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     manual_rules: list[ManualRule] = Field(default_factory=list)
+    menu_sql_mode: SqlAssetMode = "auto"
+    dict_sql_mode: SqlAssetMode = "auto"
 
     @model_validator(mode="after")
     def validate_manual_mode(self) -> "CodegenConfig":
@@ -136,6 +138,11 @@ def default_config_template() -> str:
             # auto: MCP 自动分析目标位置，并告诉 AI 先生成代码，再调用 MCP 写入
             # ask: MCP 返回候选位置，由 AI 询问用户后再继续
             # manual: 按 manual_rules 规则解析，不让用户每次重复确认
+
+          # 菜单 SQL：auto 生成迁移且 apply 时可写库；migration_only 只写迁移不写库；disabled 不生成菜单 SQL
+          menu_sql_mode: auto # auto | migration_only | disabled
+          # 字典 SQL：同上
+          dict_sql_mode: auto # auto | migration_only | disabled
 
           manual_rules:
             - module: member

@@ -9,9 +9,13 @@ from .codegen import (
     coerce_int,
     load_system_menus,
     normalize_snake_case,
+    parse_sql_scalar,
+    split_sql_value_rows,
+    split_sql_values,
     write_mysql_migration,
 )
 from .inspector import resolve_backend_repo_root
+from .schema import extract_dict_fields
 
 
 MENU_BUTTONS: list[tuple[str, str]] = [
@@ -21,6 +25,30 @@ MENU_BUTTONS: list[tuple[str, str]] = [
     ("删除", "delete"),
     ("导出", "export"),
 ]
+
+
+def _disabled_menu_plan_stub(context: dict[str, Any]) -> dict[str, Any]:
+    """Minimal menu_plan for H2 markers and tooling when menu SQL is disabled."""
+    return {
+        "table_name": context["table_name"],
+        "module_name": context["module_name"],
+        "disabled": True,
+        "all_menus_exist": True,
+        "needs_create_root_menu": False,
+        "needs_create_business_menu": False,
+        "needs_create_buttons": False,
+    }
+
+
+def _disabled_dict_plan_stub() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "has_dicts": False,
+        "disabled": True,
+        "all_complete": True,
+        "message": "已在配置中禁用字典 SQL 生成",
+        "dict_types": [],
+    }
 
 
 def build_codegen_sql_bundle(
@@ -39,26 +67,55 @@ def build_codegen_sql_bundle(
             "context": context,
         }
 
+    codegen_sql = context.get("codegen_sql") or {}
+    menu_mode: str = str(codegen_sql.get("menu_mode") or "auto")
+    dict_mode: str = str(codegen_sql.get("dict_mode") or "auto")
+
     backend_repo_root = resolve_backend_repo_root(Path(context["backend_project"]["repo_root"]))
-    menu_plan = build_menu_plan(
-        context,
-        module_menu_name=module_menu_name,
-        menu_name=menu_name,
-        menu_icon=menu_icon,
-        module_menu_icon=module_menu_icon,
-    )
     h2_plan = resolve_h2_sql_plan(backend_repo_root, context["module_name"])
-    mysql_migration_name = f"add_{context['table_name']}_menus"
+
+    if menu_mode == "disabled":
+        menu_plan = _disabled_menu_plan_stub(context)
+        menu_sql = ""
+    else:
+        menu_plan = build_menu_plan(
+            context,
+            module_menu_name=module_menu_name,
+            menu_name=menu_name,
+            menu_icon=menu_icon,
+            module_menu_icon=module_menu_icon,
+        )
+        menu_sql = render_mysql_menu_sql(menu_plan)
+
+    sql_dump_path_str = table_schema.get("sql_dump_path")
+    sql_dump_path = Path(sql_dump_path_str) if sql_dump_path_str else None
+    if dict_mode == "disabled":
+        dict_plan = _disabled_dict_plan_stub()
+        dict_sql = ""
+    else:
+        dict_plan = build_dict_plan(context, sql_dump_path=sql_dump_path)
+        dict_sql = render_dict_migration_sql(dict_plan) if dict_plan.get("has_dicts") else ""
+
+    parts = [p for p in (menu_sql.strip(), dict_sql.strip()) if p]
+    if parts:
+        combined_sql = "\n\n".join(parts) + "\n"
+    else:
+        combined_sql = (
+            "-- Yudao Pilot: 菜单与字典 SQL 均在配置中禁用 (codegen.menu_sql_mode / codegen.dict_sql_mode = disabled)\n"
+        )
+
+    menu_migration_name = f"add_{context['table_name']}_menus"
 
     return {
         "ok": True,
         "message": "代码生成 SQL 方案已构建",
         "backend_repo_root": str(backend_repo_root),
+        "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
         "mysql": {
             "supported_db": "mysql",
-            "migration_name": mysql_migration_name,
-            "migration_plan": build_migration_plan(backend_repo_root, mysql_migration_name),
-            "content": render_mysql_menu_sql(menu_plan),
+            "migration_name": menu_migration_name,
+            "migration_plan": build_migration_plan(backend_repo_root, menu_migration_name),
+            "content": combined_sql,
         },
         "h2": {
             **h2_plan,
@@ -66,6 +123,7 @@ def build_codegen_sql_bundle(
             "clean_sql": render_h2_clean_sql(context["table_name"]),
         },
         "menu_plan": menu_plan,
+        "dict_plan": dict_plan,
     }
 
 
@@ -762,6 +820,172 @@ def merge_sql_snippet(file_path: Path, *, marker: str, content: str) -> dict[str
 
 def escape_sql_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def build_dict_plan(
+    context: dict[str, Any],
+    sql_dump_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build a dict data generation plan by parsing column comments for enum patterns."""
+    table_schema = context.get("table_schema") or {}
+    columns = table_schema.get("columns") or []
+    table_name = context.get("table_name", "")
+    table_comment = str(table_schema.get("table_comment") or table_name)
+
+    dict_fields = extract_dict_fields(columns, table_name, table_comment)
+    if not dict_fields:
+        return {
+            "ok": True,
+            "has_dicts": False,
+            "message": "未检测到需要生成的字典数据",
+            "dict_types": [],
+        }
+
+    existing_types: dict[str, dict[str, Any]] = {}
+    existing_data: dict[str, list[dict[str, Any]]] = {}
+    if sql_dump_path and Path(sql_dump_path).exists():
+        existing_types = load_dict_types_from_sql(Path(sql_dump_path))
+        existing_data = load_dict_data_from_sql(Path(sql_dump_path))
+
+    dict_types: list[dict[str, Any]] = []
+    for field in dict_fields:
+        dt_key = field["dict_type"]
+        type_exists = dt_key in existing_types
+        existing_items = existing_data.get(dt_key, [])
+        existing_values = {str(item.get("value", "")) for item in existing_items}
+
+        missing_items = [
+            item for item in field["items"]
+            if str(item["value"]) not in existing_values
+        ]
+
+        dict_types.append({
+            "dict_type": dt_key,
+            "dict_name": field["dict_name"],
+            "column_name": field["column_name"],
+            "java_field": field["java_field"],
+            "ts_type": field["ts_type"],
+            "type_exists": type_exists,
+            "items": field["items"],
+            "existing_items": existing_items,
+            "missing_items": missing_items,
+            "needs_create_type": not type_exists,
+            "needs_create_data": len(missing_items) > 0,
+            "all_complete": type_exists and len(missing_items) == 0,
+        })
+
+    all_complete = all(dt["all_complete"] for dt in dict_types)
+
+    return {
+        "ok": True,
+        "has_dicts": True,
+        "all_complete": all_complete,
+        "message": "所有字典数据已存在且完整" if all_complete else "检测到需要生成的字典数据",
+        "dict_types": dict_types,
+    }
+
+
+def load_dict_types_from_sql(sql_dump_path: Path) -> dict[str, dict[str, Any]]:
+    """Load existing dict types from the SQL dump file."""
+    types: dict[str, dict[str, Any]] = {}
+    for line in sql_dump_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.startswith("INSERT INTO `system_dict_type`"):
+            continue
+        values_text = line.partition("VALUES")[2].strip().rstrip(";")
+        for row_text in split_sql_value_rows(values_text):
+            values = split_sql_values(row_text)
+            if len(values) < 4:
+                continue
+            dict_id = coerce_int(parse_sql_scalar(values[0]))
+            name = parse_sql_scalar(values[1])
+            type_key = parse_sql_scalar(values[2])
+            if type_key:
+                types[str(type_key)] = {
+                    "id": dict_id,
+                    "name": name,
+                    "type": type_key,
+                }
+    return types
+
+
+def load_dict_data_from_sql(sql_dump_path: Path) -> dict[str, list[dict[str, Any]]]:
+    """Load existing dict data items grouped by dict_type from the SQL dump file."""
+    data: dict[str, list[dict[str, Any]]] = {}
+    for line in sql_dump_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.startswith("INSERT INTO `system_dict_data`"):
+            continue
+        values_text = line.partition("VALUES")[2].strip().rstrip(";")
+        for row_text in split_sql_value_rows(values_text):
+            values = split_sql_values(row_text)
+            if len(values) < 5:
+                continue
+            dict_id = coerce_int(parse_sql_scalar(values[0]))
+            sort_val = coerce_int(parse_sql_scalar(values[1]))
+            label = parse_sql_scalar(values[2])
+            value = parse_sql_scalar(values[3])
+            dict_type = parse_sql_scalar(values[4])
+            if dict_type:
+                data.setdefault(str(dict_type), []).append({
+                    "id": dict_id,
+                    "sort": sort_val,
+                    "label": label,
+                    "value": value,
+                    "dict_type": dict_type,
+                })
+    return data
+
+
+def render_dict_migration_sql(dict_plan: dict[str, Any]) -> str:
+    """Render idempotent INSERT SQL for dict types and dict data items."""
+    dict_types = dict_plan.get("dict_types") or []
+    if not dict_types:
+        return ""
+
+    lines: list[str] = [
+        "-- 字典类型与字典数据，由 Yudao Pilot 自动生成",
+        "",
+    ]
+
+    for dt in dict_types:
+        dt_key = escape_sql_string(dt["dict_type"])
+        dt_name = escape_sql_string(dt["dict_name"])
+
+        lines.append(f"-- 字典类型: {dt['dict_name']} ({dt['dict_type']})")
+        lines.extend([
+            "INSERT INTO system_dict_type(",
+            "    name, type, status, remark,",
+            "    creator, create_time, updater, update_time, deleted",
+            ")",
+            "SELECT",
+            f"    '{dt_name}', '{dt_key}', 0, NULL,",
+            "    'yudao-pilot', NOW(), 'yudao-pilot', NOW(), b'0'",
+            "WHERE NOT EXISTS (",
+            f"    SELECT 1 FROM system_dict_type WHERE type = '{dt_key}' AND deleted = b'0'",
+            ");",
+            "",
+        ])
+
+        for item in dt["items"]:
+            item_label = escape_sql_string(str(item["label"]))
+            item_value = escape_sql_string(str(item["value"]))
+            color_type = escape_sql_string(str(item.get("color_type", "")))
+            sort_val = item.get("sort", 0)
+
+            lines.extend([
+                "INSERT INTO system_dict_data(",
+                "    sort, label, value, dict_type, status, color_type, css_class, remark,",
+                "    creator, create_time, updater, update_time, deleted",
+                ")",
+                "SELECT",
+                f"    {sort_val}, '{item_label}', '{item_value}', '{dt_key}', 0, '{color_type}', '', NULL,",
+                "    'yudao-pilot', NOW(), 'yudao-pilot', NOW(), b'0'",
+                "WHERE NOT EXISTS (",
+                f"    SELECT 1 FROM system_dict_data WHERE dict_type = '{dt_key}' AND value = '{item_value}' AND deleted = b'0'",
+                ");",
+                "",
+            ])
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 ROOT_MENU_ICON_HINTS: dict[str, str] = {

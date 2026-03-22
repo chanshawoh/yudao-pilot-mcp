@@ -99,6 +99,10 @@ codegen:
   routing:
     mode: manual
 
+  # 菜单 / 字典 SQL：auto | migration_only | disabled（默认 auto，见下文说明）
+  menu_sql_mode: auto
+  dict_sql_mode: auto
+
   manual_rules:
     - module: member
       table_prefixes:
@@ -199,6 +203,16 @@ codegen:
   - 实体名
   - 用于实体类、VO、DTO、前端类型名等命名
 
+- `menu_sql_mode`（可选，默认 `auto`）
+  - 控制 **菜单** 相关 MySQL 迁移 SQL 的生成与是否允许写库（配合工具参数 `apply_menu_to_database`）
+  - `auto`：生成菜单 SQL；`write_files` 时写入迁移；`apply_menu_to_database=true` 且菜单尚未存在时写入数据库
+  - `migration_only`：生成菜单 SQL 并可写迁移文件，**永不**把菜单写入数据库
+  - `disabled`：迁移文件中**不包含**菜单 SQL 片段
+
+- `dict_sql_mode`（可选，默认 `auto`）
+  - 控制从表字段注释解析出的 **字典**（`system_dict_type` / `system_dict_data`）迁移 SQL 与写库行为，取值含义同 `menu_sql_mode`
+  - 两者均为 `disabled` 时，MySQL 迁移仅保留一行说明注释；H2 测试 SQL（建表/清理）不受影响
+
 ### 配置解析规则
 
 - 一个工作区只能有一个后端项目
@@ -258,18 +272,29 @@ AI 应用负责：
 - `compare_codegen_reference_projects` 用来确认 `ruoyi-vue-pro` 和 `ruoyi-vue-pro-jdk17` 的代码生成核心是否可复用
 - `inspect_codegen_context` 会补齐模块名、业务名、实体名、权限标识、后端默认 codegen 配置、前端模板类型、菜单父级候选、生成文件计划和迁移文件建议路径
 - `inspect_table_schema` 会从后端仓库的 MySQL 结构文件中解析指定表的字段信息，供后续字段级代码生成复用
-- `generate_codegen_sql` 会生成 MySQL 菜单迁移 SQL，自动合并 H2 `create_tables.sql` / `clean.sql`，并可把菜单幂等写入真实数据库
+- `generate_codegen_sql` 会生成 MySQL 菜单迁移 SQL（及字段注释可解析时的字典 SQL），自动合并 H2 `create_tables.sql` / `clean.sql`；在配置为 `auto` 且开启 `apply_menu_to_database` 时，可幂等写入菜单与字典到真实数据库（详见 `codegen.menu_sql_mode` / `codegen.dict_sql_mode`）
 - `generate_codegen_scaffold` 会基于当前上下文直接生成第一版后端和前端骨架代码，可只预览，也可直接写入工作区
 - `write_mysql_migration` 会把新增 SQL 结构写入 `sql/mysql/migrations/`，文件名采用 Laravel 风格时间戳
 
-## SQL 与菜单生成
+## SQL、菜单与字典生成
 
 当前仓库已经支持面向代码生成的 SQL 流程，重点包含：
 
-- 生成 MySQL 菜单迁移 SQL
+- 生成 MySQL **菜单**迁移 SQL（根菜单、业务菜单、按钮权限，幂等 `INSERT`）
+- 根据表字段注释解析 **字典**枚举时，生成 `system_dict_type` / `system_dict_data` 迁移 SQL（幂等）
 - 自动定位后端模块的 H2 测试 SQL 文件
 - 把 H2 建表和清理语句幂等合并到对应模块
-- 把菜单数据幂等执行到真实数据库
+- 在配置允许时，把菜单与字典数据幂等执行到真实数据库
+
+**工作区配置**（`codegen.menu_sql_mode`、`codegen.dict_sql_mode`）：
+
+| 取值 | 迁移文件中的 SQL | `apply_menu_to_database=true` 时写库 |
+|------|------------------|----------------------------------------|
+| `auto`（默认） | 生成对应片段 | 会写库（仍受「已存在则跳过」约束） |
+| `migration_only` | 生成对应片段 | **不写库**（仅落迁移文件） |
+| `disabled` | **不包含**该段 | **不写库** |
+
+菜单与字典可分别配置，例如仅生成字典迁移、不写库：`menu_sql_mode: migration_only` + `dict_sql_mode: migration_only`。
 
 相关工具：
 
@@ -290,7 +315,7 @@ AI 应用负责：
 - `write_files`
   - 是否把 SQL 文件真实写入仓库
 - `apply_menu_to_database`
-  - 是否把菜单数据真实执行到数据库
+  - 是否尝试将 **菜单与字典**执行到数据库；实际是否写库仍受 `menu_sql_mode` / `dict_sql_mode` 约束（仅 `auto` 会写库）
 
 示例调用思路：
 
@@ -348,10 +373,10 @@ yudao-pilot-mcp/
 
 ## 相关文档
 
-- Agent 主协议：[.ai/agent.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/.ai/agent.md)
-- AI 应用接入协议：[.ai/ai-integration.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/.ai/ai-integration.md)
-- 产品与商业说明：[docs/product.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/docs/product.md)
-- 路线图文档：[docs/roadmap.md](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/docs/roadmap.md)
+- Agent 主协议：[.ai/agent.md](.ai/agent.md)
+- AI 应用接入协议：[.ai/ai-integration.md](.ai/ai-integration.md)
+- 产品与商业说明：[docs/product.md](docs/product.md)
+- 路线图文档：[docs/roadmap.md](docs/roadmap.md)
 
 ## 开发测试
 
@@ -374,7 +399,7 @@ yudao-pilot-mcp/
 
 开发用工作区配置样例已生成在：
 
-- [tests/fixtures/dev-workspace/.yudao-pilot/config.yaml](/Users/woodynew/mydata/project/demo/codex/yudao-pilot-mcp/tests/fixtures/dev-workspace/.yudao-pilot/config.yaml)
+- [tests/fixtures/dev-workspace/.yudao-pilot/config.yaml](tests/fixtures/dev-workspace/.yudao-pilot/config.yaml)
 
 如果你要本地联调 MCP 工具，直接把该样例作为工作区根目录即可。
 
@@ -388,6 +413,6 @@ yudao-pilot-mcp/
 - 从后端本地 `application*.yaml` 解析数据库连接
 - 推导表对应的模块、业务名、实体名、前端模板和菜单上下文
 - 将新的 MySQL 迁移文件写入 `sql/mysql/migrations/`
-- 生成菜单 SQL、合并 H2 测试 SQL，并支持幂等写入菜单到真实数据库
+- 生成菜单与字典 SQL、合并 H2 测试 SQL，并支持按配置幂等写入菜单/字典到真实数据库
 
 当前推荐直接以 `ruoyi-vue-pro-jdk17` 作为第一版参考实现继续开发。

@@ -417,6 +417,110 @@ def ensure_button_menu(
     return int(cursor.lastrowid), True
 
 
+def apply_dict_plan_to_database(
+    database_config: dict[str, Any] | DatabaseConfig,
+    dict_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply dict plan to database: create missing dict types and data items."""
+    dict_types = dict_plan.get("dict_types") or []
+    if not dict_types:
+        return {"ok": True, "created": [], "skipped": [], "message": "无需创建字典数据"}
+
+    config = (
+        database_config
+        if isinstance(database_config, DatabaseConfig)
+        else DatabaseConfig.model_validate(database_config)
+    )
+    pymysql = import_pymysql()
+    connection = pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.username,
+        password=config.password,
+        database=config.database,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
+    )
+    created: list[str] = []
+    skipped: list[str] = []
+    data_created: list[str] = []
+    data_skipped: list[str] = []
+
+    try:
+        with connection.cursor() as cursor:
+            for dt in dict_types:
+                type_key = dt["dict_type"]
+                type_name = dt["dict_name"]
+
+                cursor.execute(
+                    "SELECT id FROM system_dict_type WHERE type = %s AND deleted = b'0' LIMIT 1",
+                    (type_key,),
+                )
+                existing_type = cursor.fetchone()
+
+                if existing_type:
+                    skipped.append(f"字典类型:{type_key}({type_name})")
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO system_dict_type(
+                            name, type, status, remark,
+                            creator, create_time, updater, update_time, deleted
+                        ) VALUES (
+                            %s, %s, 0, NULL,
+                            'yudao-pilot', NOW(), 'yudao-pilot', NOW(), b'0'
+                        )
+                        """,
+                        (type_name, type_key),
+                    )
+                    created.append(f"字典类型:{type_key}({type_name})")
+
+                for item in dt["items"]:
+                    item_value = str(item["value"])
+                    item_label = str(item["label"])
+                    color_type = str(item.get("color_type", ""))
+                    sort_val = item.get("sort", 0)
+
+                    cursor.execute(
+                        "SELECT id FROM system_dict_data WHERE dict_type = %s AND value = %s AND deleted = b'0' LIMIT 1",
+                        (type_key, item_value),
+                    )
+                    existing_item = cursor.fetchone()
+                    if existing_item:
+                        data_skipped.append(f"字典数据:{type_key}[{item_value}={item_label}]")
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO system_dict_data(
+                                sort, label, value, dict_type, status, color_type, css_class, remark,
+                                creator, create_time, updater, update_time, deleted
+                            ) VALUES (
+                                %s, %s, %s, %s, 0, %s, '', NULL,
+                                'yudao-pilot', NOW(), 'yudao-pilot', NOW(), b'0'
+                            )
+                            """,
+                            (sort_val, item_label, item_value, type_key, color_type),
+                        )
+                        data_created.append(f"字典数据:{type_key}[{item_value}={item_label}]")
+
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+    return {
+        "ok": True,
+        "database": config.database,
+        "type_created": created,
+        "type_skipped": skipped,
+        "data_created": data_created,
+        "data_skipped": data_skipped,
+    }
+
+
 def sync_existing_root_menu(cursor: Any, existing: dict[str, Any], menu: dict[str, Any]) -> str:
     updates: list[str] = []
     params: list[Any] = []

@@ -137,6 +137,10 @@ def build_codegen_context(
         "business_name": business_name,
         "entity_name": entity_name,
         "menu_name": menu_name or entity_name,
+        "codegen_sql": {
+            "menu_mode": config.codegen.menu_sql_mode,
+            "dict_mode": config.codegen.dict_sql_mode,
+        },
         "permission_prefix": build_permission_prefix(module_name, entity_name),
         "backend_project": {
             "type": config.projects.backend.type,

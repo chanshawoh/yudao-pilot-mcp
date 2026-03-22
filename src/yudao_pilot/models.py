@@ -23,6 +23,8 @@ FrontendProjectType = Literal[
 ProjectKind = Literal["backend", "frontend", "unknown"]
 RoutingMode = Literal["auto", "ask", "manual"]
 DatabaseMode = Literal["auto", "manual"]
+# 菜单 / 字典 SQL：auto 写入迁移并可入库；migration_only 仅迁移文件；disabled 不生成对应 SQL
+SqlAssetMode = Literal["auto", "disabled", "migration_only"]
 TargetKind = Literal["backend", "frontend"]
 
 SUPPORTED_BACKEND_TYPES = ("ruoyi-vue-pro", "ruoyi-vue-pro-jdk17", "yudao-cloud")
