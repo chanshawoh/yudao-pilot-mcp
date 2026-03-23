@@ -688,12 +688,18 @@ def scan_backend_table_entities(backend_root: Path) -> list[ScannedTableEntity]:
 
 
 def _parse_enabled_modules(backend_root: Path) -> list[str]:
-    """Parse root pom.xml <modules> to find enabled yudao-module-* entries."""
+    """Collect yudao modules from both pom.xml and existing module directories."""
     root_pom = backend_root / "pom.xml"
-    if not root_pom.exists():
-        return []
-    facts = parse_pom(root_pom)
-    return [m for m in facts.modules if m.startswith("yudao-module-")]
+    modules: list[str] = []
+    if root_pom.exists():
+        facts = parse_pom(root_pom)
+        modules.extend(m for m in facts.modules if m.startswith("yudao-module-"))
+    modules.extend(
+        module_dir.name
+        for module_dir in backend_root.glob("yudao-module-*")
+        if module_dir.is_dir()
+    )
+    return deduplicate_preserve_order(modules)
 
 
 def _extract_table_name(do_file: Path) -> str | None:

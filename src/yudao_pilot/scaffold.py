@@ -673,7 +673,7 @@ def render_vue3_index(relative_path: str, context: dict[str, Any]) -> str:
 
 <script setup lang="ts">
 import {{ ref }} from 'vue'
-import {entity_name}Form from './{simple_class_name}Form.vue'
+import {simple_class_name}Form from './{simple_class_name}Form.vue'
 
 {ts_interface}
 
@@ -1699,6 +1699,8 @@ def render_vben_form_schema_fields(
             "java_field": "remark",
             "column_comment": "备注",
             "html_type": "textarea",
+            "java_type": "String",
+            "ts_type": "string",
             "nullable": True,
         }
     ]
@@ -1872,9 +1874,10 @@ def needs_vben_get_dict_options(fields: list[dict[str, Any]]) -> bool:
 
 
 def resolve_vben_dict_value_type(field: dict[str, Any]) -> str:
-    if field["ts_type"] == "number":
+    ts_type = field.get("ts_type", "string")
+    if ts_type == "number":
         return "number"
-    if field["ts_type"] == "boolean":
+    if ts_type == "boolean":
         return "boolean"
     return "string"
 

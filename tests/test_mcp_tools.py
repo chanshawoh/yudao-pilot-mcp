@@ -248,6 +248,36 @@ def test_generate_codegen_scaffold_uses_suffix_subdirectory_when_frontend_busine
     assert result["data"]["context"]["generated_file_plan"]["frontend_business_path"] == "merchant/user"
 
 
+def test_generate_codegen_scaffold_uses_simple_class_name_for_vue3_form_import(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    index_vue = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/views/hotel/brand/index.vue")
+    )
+
+    assert "import BrandForm from './BrandForm.vue'" in index_vue["content"]
+    assert "<BrandForm ref=\"formRef\" />" in index_vue["content"]
+    assert "import HotelBrandForm from './BrandForm.vue'" not in index_vue["content"]
+
+
 def test_generate_vben_schema_refines_field_rendering_rules(
     workspace_builder, monkeypatch
 ) -> None:
@@ -426,8 +456,8 @@ def test_generate_vben_schema_refines_field_rendering_rules(
     assert "DICT_TYPE.COMMON_STATUS" in antd_data
     assert "getRangePickerDefaultProps" in antd_data
     assert "deleteToken" not in antd_data
-    assert "管理员" in antd_data
-    assert "员工" in antd_data
+    assert "merchant_user_role_type" in antd_data
+    assert "getDictOptions('merchant_user_role_type', 'number')" in antd_data
     assert "allowClear: true" in antd_data
     assert "clearable: true" in ep_data
 
@@ -1246,10 +1276,10 @@ def test_scan_backend_table_entities_finds_do_files(repo_root: Path) -> None:
     backend_root = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"
     entities = scan_backend_table_entities(backend_root)
     table_names = {e.table_name for e in entities}
-    assert "merchant" in table_names
-    merchant = next(e for e in entities if e.table_name == "merchant")
-    assert merchant.module_name == "member"
-    assert merchant.business_dir == "merchant"
+    assert "hotel_brand" in table_names
+    hotel_brand = next(e for e in entities if e.table_name == "hotel_brand")
+    assert hotel_brand.module_name == "hotel"
+    assert hotel_brand.business_dir == "hotel_brand"
 
 
 def test_scan_backend_table_entities_empty_on_missing_dir(tmp_path: Path) -> None:
