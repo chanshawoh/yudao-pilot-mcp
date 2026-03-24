@@ -201,6 +201,16 @@ def resolve_h2_sql_plan(backend_repo_root: Path, module_name: str) -> dict[str, 
         if candidate.with_name("clean.sql").exists()
     ]
     if len(paired_candidates) != 1:
+        module_root = backend_repo_root / module_dir_name
+        if module_root.is_dir():
+            create_path, clean_path = ensure_h2_sql_files(module_root)
+            return {
+                "resolved": True,
+                "module_name": module_name,
+                "create_tables_path": str(create_path),
+                "clean_path": str(clean_path),
+                "message": "模块测试 SQL 文件不存在，已自动创建基础文件",
+            }
         return {
             "resolved": False,
             "module_name": module_name,
@@ -219,6 +229,17 @@ def resolve_h2_sql_plan(backend_repo_root: Path, module_name: str) -> dict[str, 
         "clean_path": str(clean_path),
         "message": "已定位模块测试 SQL 文件",
     }
+
+
+def ensure_h2_sql_files(module_root: Path) -> tuple[Path, Path]:
+    sql_dir = module_root / "src" / "test" / "resources" / "sql"
+    sql_dir.mkdir(parents=True, exist_ok=True)
+    create_path = sql_dir / "create_tables.sql"
+    clean_path = sql_dir / "clean.sql"
+    for path in (create_path, clean_path):
+        if not path.exists():
+            path.write_text("", encoding="utf-8")
+    return create_path, clean_path
 
 
 def build_menu_plan(

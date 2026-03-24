@@ -70,6 +70,10 @@ def merge_manual_error_code_file(
         constants_text, section_title, system_segment, constants
     )
     if not merged:
+        if reason == "目标 ErrorCodeConstants.java 中已存在同名错误码常量":
+            if manual_path.exists():
+                manual_path.unlink()
+            return True, str(actual_path), "错误码常量已存在，跳过合并"
         return False, str(actual_path), reason
 
     actual_path.parent.mkdir(parents=True, exist_ok=True)

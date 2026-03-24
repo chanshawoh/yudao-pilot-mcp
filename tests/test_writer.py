@@ -210,3 +210,77 @@ public interface ErrorCodeConstants_手动操作 {
     merged_text = constants_path.read_text(encoding="utf-8")
     assert "商家 1-004-013-000" in merged_text
     assert 'ErrorCode MERCHANT_NOT_EXISTS = new ErrorCode(1_004_013_000, "商家不存在");' in merged_text
+
+
+def test_backend_writer_treats_existing_manual_error_code_as_success(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    constants_path = repo_root / "yudao-module-hotel/src/main/java/cn/iocoder/yudao/module/hotel/enums/ErrorCodeConstants.java"
+    constants_path.parent.mkdir(parents=True, exist_ok=True)
+    constants_path.write_text(
+        """package cn.iocoder.yudao.module.hotel.enums;
+
+import cn.iocoder.yudao.framework.common.exception.ErrorCode;
+
+/**
+ * Hotel 错误码枚举类
+ *
+ * hotel 系统，使用 1-023-000-000 段
+ */
+public interface ErrorCodeConstants {
+
+    // ========== 酒店品牌 1-023-001-000 ==========
+    ErrorCode HOTEL_BRAND_NOT_EXISTS = new ErrorCode(1_023_001_000, "酒店品牌不存在");
+}
+""",
+        encoding="utf-8",
+    )
+    range_path = repo_root / "yudao-framework/yudao-common/src/main/java/cn/iocoder/yudao/framework/common/exception/enums/ServiceErrorCodeRange.java"
+    range_path.parent.mkdir(parents=True, exist_ok=True)
+    range_path.write_text(
+        """package cn.iocoder.yudao.framework.common.exception.enums;
+
+public class ServiceErrorCodeRange {
+
+    // 模块 hotel 错误码区间 [1-023-000-000 ~ 1-024-000-000)
+
+}
+""",
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {
+                    "path": str(repo_root),
+                    "type": "ruoyi-vue-pro-jdk17",
+                },
+                "frontend": [],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="backend",
+                target_type="ruoyi-vue-pro-jdk17",
+                relative_path="yudao-module-hotel/src/main/java/cn/iocoder/yudao/module/hotel/enums/ErrorCodeConstants_手动操作.java",
+                content="""package cn.iocoder.yudao.module.hotel.enums;
+
+import cn.iocoder.yudao.framework.common.exception.ErrorCode;
+
+// Yudao Pilot Section: 酒店品牌
+public interface ErrorCodeConstants_手动操作 {
+
+    ErrorCode HOTEL_BRAND_NOT_EXISTS = new ErrorCode(0, "酒店品牌不存在");
+}
+""",
+            )
+        ],
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["written"] is True

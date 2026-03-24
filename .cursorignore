@@ -1,0 +1,103 @@
+# ==================== 通用过滤规则（所有项目必加） ====================
+# 1. 依赖包（占无效文件90%，优先过滤）
+node_modules/
+vendor/
+libs/
+packages/
+.packages/
+composer_modules/
+site-packages/
+Gemfile.lock
+yarn.lock
+package-lock.json
+pnpm-lock.yaml
+
+# 2. 编译/构建产物（无代码逻辑，纯消耗token）
+build/
+dist/
+out/
+target/
+bin/
+obj/
+.gradle/
+.next/
+.nuxt/
+buildout/
+coverage/
+.angular/
+public/build/
+ios/build/
+android/build/
+android/app/build/
+
+# 3. 版本控制与临时文件
+.git/
+.svn/
+.hg/
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 4. 敏感/配置文件（避免泄露+减少无效读取）
+.env*
+*.env
+*.ini
+*.conf
+*.pem
+*.key
+*.cert
+config/secrets/
+credentials/
+
+# 5. IDE/编辑器配置文件
+.idea/
+.vscode/
+*.iml
+*.idea/
+.project
+.classpath
+.c9/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ==================== 按需扩展（根据项目类型调整） ====================
+# 前端专属
+*.map
+.cache/
+.eslintcache
+webpack-stats.json
+rollup.config.js.*
+vite.config.js.*
+
+# 后端/Java专属
+*.jar
+*.war
+*.ear
+.mvn/
+gradle/
+gradlew
+gradlew.bat
+
+# 移动端专属
+ios/Pods/
+android/.cxx/
+android/gradle/
+android/gradlew
+android/gradlew.bat
+*.apk
+*.ipa
+*.xcarchive
+
+# ==================== 白名单（仅允许索引核心源码，按需修改） ====================
+!**/src/**          # 核心业务代码
+!**/lib/**          # 自定义工具库
+!**/components/**   # 前端组件
+!**/api/**          # 接口层代码
+!**/service/**      # 服务层代码

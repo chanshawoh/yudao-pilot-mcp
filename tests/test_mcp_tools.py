@@ -8,6 +8,7 @@ import yaml
 from yudao_pilot import schema as schema_module
 from yudao_pilot.database import apply_menu_plan_to_database
 from yudao_pilot.inspector import scan_backend_table_entities
+from yudao_pilot.models import TableResolution
 from yudao_pilot.server import (
     generate_codegen_scaffold_tool,
     generate_codegen_sql_tool,
@@ -19,7 +20,7 @@ from yudao_pilot.server import (
     _create_module_scaffold,
     _ensure_module_enabled,
 )
-from yudao_pilot.sql_codegen import merge_sql_snippet
+from yudao_pilot.sql_codegen import merge_sql_snippet, resolve_h2_sql_plan
 
 
 def test_resolve_database_config_from_backend_local(workspace_builder) -> None:
@@ -1041,6 +1042,126 @@ def test_merge_sql_snippet_is_idempotent(tmp_path: Path) -> None:
     assert sql_file.read_text(encoding="utf-8").count('CREATE TABLE IF NOT EXISTS "merchant"') == 1
 
 
+def test_resolve_h2_sql_plan_auto_creates_missing_module_sql_files(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    module_root = backend_root / "yudao-module-hotel"
+    module_root.mkdir(parents=True)
+
+    result = resolve_h2_sql_plan(backend_root, "hotel")
+
+    assert result["resolved"] is True
+    assert "已自动创建基础文件" in result["message"]
+    assert (module_root / "src/test/resources/sql/create_tables.sql").exists()
+    assert (module_root / "src/test/resources/sql/clean.sql").exists()
+
+
+def test_generate_codegen_sql_tool_continues_database_apply_when_file_write_fails(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    apply_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "yudao_pilot.server.infer_table_resolution",
+        lambda *args, **kwargs: TableResolution(
+            module="hotel",
+            matched_by="new_module",
+            business="hotel_brand",
+            entity="HotelBrand",
+        ),
+    )
+    monkeypatch.setattr(
+        "yudao_pilot.server.build_codegen_context",
+        lambda *args, **kwargs: {
+            "module_name": "hotel",
+            "business_name": "hotel_brand",
+            "entity_name": "HotelBrand",
+            "table_name": "hotel_brand",
+            "backend_project": {"repo_root": "/tmp/fake-backend"},
+            "codegen_sql": {"menu_mode": "auto", "dict_mode": "auto"},
+        },
+    )
+    monkeypatch.setattr(
+        "yudao_pilot.server.build_codegen_sql_bundle",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "message": "ok",
+            "backend_repo_root": "/tmp/fake-backend",
+            "mysql": {
+                "migration_name": "add_hotel_brand_menus",
+                "content": "-- test\n",
+            },
+            "h2": {
+                "resolved": False,
+                "message": "未能唯一定位模块测试 SQL 文件，请检查后端模块结构",
+            },
+            "menu_plan": {
+                "disabled": False,
+                "all_menus_exist": False,
+                "root_menu": {"name": "酒店管理"},
+                "business_menu": {"name": "品牌管理"},
+                "buttons": [],
+            },
+            "dict_plan": {
+                "disabled": False,
+                "has_dicts": False,
+                "all_complete": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "yudao_pilot.server.write_codegen_sql_bundle",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "results": [
+                {
+                    "ok": False,
+                    "kind": "h2_create_tables",
+                    "message": "未能唯一定位模块测试 SQL 文件，请检查后端模块结构",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "yudao_pilot.server.resolve_database_config",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "database": {
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+                "username": "root",
+                "password": "123456",
+            },
+            "message": "ok",
+        },
+    )
+
+    def fake_apply_menu(database_config, menu_plan):
+        apply_calls.append({"database": database_config, "menu_plan": menu_plan})
+        return {
+            "ok": True,
+            "created": ["业务菜单:品牌管理"],
+            "updated": [],
+            "skipped": [],
+        }
+
+    monkeypatch.setattr("yudao_pilot.server.apply_menu_plan_to_database", fake_apply_menu)
+
+    result = generate_codegen_sql_tool(
+        "hotel_brand",
+        str(workspace_root),
+        write_files=True,
+        apply_menu_to_database=True,
+    )
+
+    assert result["ok"] is True
+    assert result["message"] == "SQL 已生成并执行数据库写入，但部分文件写入失败"
+    assert result["data"]["write_result"]["ok"] is False
+    assert result["data"]["apply_result"]["ok"] is True
+    assert len(apply_calls) == 1
+
+
 def test_apply_menu_plan_to_database_is_idempotent(monkeypatch) -> None:
     statements: list[tuple[str, tuple[object, ...] | None]] = []
     fetch_queue = [
@@ -1325,6 +1446,27 @@ def test_infer_resolution_scan_matches_existing_do(workspace_builder, repo_root:
     r = infer_table_resolution("system_notice_template", config, backend_root=backend_root)
     assert r.matched_by == "scan"
     assert r.module == "system"
+
+
+def test_infer_resolution_scan_uses_suffix_business_when_table_prefixed_by_module(
+    workspace_builder, repo_root: Path
+) -> None:
+    from yudao_pilot.config import load_workspace_config
+
+    ws = workspace_builder(
+        manual_rules_yaml="""\
+- module: member
+  table_prefixes: []
+  table_rules: []
+""",
+    )
+    config = load_workspace_config(ws)
+    backend_root = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"
+    r = infer_table_resolution("hotel_brand", config, backend_root=backend_root)
+
+    assert r.matched_by == "scan"
+    assert r.module == "hotel"
+    assert r.business == "brand"
 
 
 def test_infer_resolution_no_backend_root_falls_back(workspace_builder) -> None:

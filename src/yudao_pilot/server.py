@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from .codegen import (
     build_codegen_context,
     compare_codegen_reference_projects,
+    normalize_snake_case,
     write_mysql_migration,
 )
 from .config import (
@@ -489,12 +490,6 @@ def generate_codegen_sql_tool(
         write_result = write_codegen_sql_bundle(sql_bundle, overwrite=overwrite)
         write_result["workspace_root"] = str(root)
         result["write_result"] = write_result
-        if not write_result["ok"]:
-            return error_response(
-                "generate_codegen_sql_write_failed",
-                "SQL 已生成，但写入文件时存在失败项",
-                result,
-            )
 
     if apply_menu_to_database:
         codegen_sql = context.get("codegen_sql", {})
@@ -566,6 +561,26 @@ def generate_codegen_sql_tool(
                 "message": _describe_dict_apply_skip(dict_mode, dict_plan),
             }
 
+    write_failed = bool(write_files and not result.get("write_result", {}).get("ok", True))
+    apply_succeeded = bool(
+        not apply_menu_to_database
+        or (
+            result.get("apply_result", {}).get("ok", True)
+            and result.get("dict_apply_result", {}).get("ok", True)
+        )
+    )
+    if write_failed:
+        if apply_menu_to_database and apply_succeeded:
+            return success_response(
+                "SQL 已生成并执行数据库写入，但部分文件写入失败",
+                result,
+            )
+        return error_response(
+            "generate_codegen_sql_write_failed",
+            "SQL 已生成，但写入文件时存在失败项",
+            result,
+        )
+
     return success_response("代码生成 SQL 已准备完成", result)
 
 
@@ -605,7 +620,7 @@ def infer_table_resolution(
                 module=prefix_module,
                 matched_by="prefix",
                 matched_prefix=matched_prefix,
-                business=matched_prefix,
+                business=derive_business_name(prefix_module, table_name, matched_prefix),
                 entity=snake_to_pascal(table_name),
             )
 
@@ -624,7 +639,7 @@ def infer_table_resolution(
             return TableResolution(
                 module=inferred_module,
                 matched_by="new_module",
-                business=table_name,
+                business=derive_business_name(inferred_module, table_name),
                 entity=snake_to_pascal(table_name),
             )
         _create_module_scaffold(backend_root, inferred_module)
@@ -632,14 +647,14 @@ def infer_table_resolution(
         return TableResolution(
             module=inferred_module,
             matched_by="new_module",
-            business=table_name,
+            business=derive_business_name(inferred_module, table_name),
             entity=snake_to_pascal(table_name),
         )
 
     return TableResolution(
         module=inferred_module,
         matched_by="fallback",
-        business=table_name,
+        business=derive_business_name(inferred_module, table_name),
         entity=snake_to_pascal(table_name),
     )
 
@@ -656,7 +671,7 @@ def _resolve_by_scan(table_name: str, backend_root: Path) -> TableResolution | N
                 module=entity.module_name,
                 matched_by="scan",
                 matched_table=existing,
-                business=entity.business_dir,
+                business=derive_business_name(entity.module_name, table_name, entity.business_dir),
                 entity=snake_to_pascal(table_name),
             )
         if table_name.startswith(f"{existing}_") and len(existing) > best_len:
@@ -667,10 +682,30 @@ def _resolve_by_scan(table_name: str, backend_root: Path) -> TableResolution | N
             module=best_match.module_name,
             matched_by="scan",
             matched_prefix=best_match.table_name,
-            business=best_match.business_dir,
+            business=derive_business_name(best_match.module_name, table_name, best_match.business_dir),
             entity=snake_to_pascal(table_name),
         )
     return None
+
+
+def derive_business_name(module_name: str, table_name: str, business_name: str | None = None) -> str:
+    normalized_module = normalize_snake_case(module_name)
+    normalized_table = normalize_snake_case(table_name)
+    raw_business = str(business_name or normalized_table).replace("\\", "/").strip().strip("/")
+    if not raw_business:
+        raw_business = normalized_table
+
+    business_segments = [normalize_snake_case(segment) for segment in raw_business.split("/") if segment.strip()]
+    if not business_segments:
+        business_segments = [normalized_table]
+
+    business_leaf = business_segments[-1]
+    if normalized_table.startswith(normalized_module + "_"):
+        table_suffix = normalized_table[len(normalized_module) + 1 :]
+        if business_leaf in {normalized_table, normalized_module, f"{normalized_module}_{table_suffix}"}:
+            business_segments[-1] = table_suffix
+
+    return "/".join(segment for segment in business_segments if segment)
 
 
 

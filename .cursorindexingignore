@@ -1,0 +1,62 @@
+# ==================== 索引过滤核心规则 ====================
+# 1. 完全禁止索引的目录（优先级最高）
+**/node_modules/**
+**/build/**
+**/dist/**
+**/target/**
+**/.git/**
+**/.idea/**
+**/.vscode/**
+**/tests/**        # 测试文件无需索引（除非专门做测试开发）
+**/__tests__/**
+**/spec/**
+**/jest/**
+**/mocha/**
+
+# 2. 禁止索引的文件类型（非源码文件）
+**/*.log
+# **/*.md            # 文档文件（如需AI分析文档可注释此行）
+**/*.txt
+**/*.pdf
+**/*.docx
+**/*.xlsx
+**/*.png
+**/*.jpg
+**/*.gif
+**/*.svg
+**/*.mp4
+**/*.zip
+**/*.tar.gz
+**/*.7z
+
+# 3. 配置/日志类文件
+**/*.json          # 仅过滤非源码json（如package.json需保留可加!package.json）
+**/*.yml
+**/*.yaml
+**/*.toml
+**/*.xml
+**/*.properties
+
+# 4. 构建/脚本类文件（非核心源码）
+**/Makefile
+**/*.sh
+**/*.bat
+**/*.cmd
+**/Dockerfile
+**/*.dockerignore
+**/docker-compose*.yml
+
+# ==================== 白名单（仅索引核心源码文件） ====================
+!**/src/**/*.js
+!**/src/**/*.ts
+!**/src/**/*.jsx
+!**/src/**/*.tsx
+!**/src/**/*.vue
+!**/src/**/*.java
+!**/src/**/*.kt
+!**/src/**/*.swift
+!**/src/**/*.py
+!**/src/**/*.go
+!**/src/**/*.cpp
+!**/src/**/*.c
+!**/src/**/*.h
