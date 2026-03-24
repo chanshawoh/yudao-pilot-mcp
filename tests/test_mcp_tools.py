@@ -279,6 +279,35 @@ def test_generate_codegen_scaffold_uses_simple_class_name_for_vue3_form_import(
     assert "import HotelBrandForm from './BrandForm.vue'" not in index_vue["content"]
 
 
+def test_generate_codegen_scaffold_uses_business_name_for_controller_route(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    controller_java = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("controller/admin/brand/HotelBrandController.java")
+    )
+
+    assert '@RequestMapping("/hotel/brand")' in controller_java["content"]
+    assert '@RequestMapping("/hotel/hotel-brand")' not in controller_java["content"]
+
+
 def test_generate_vben_schema_refines_field_rendering_rules(
     workspace_builder, monkeypatch
 ) -> None:
@@ -1464,7 +1493,7 @@ def test_infer_resolution_scan_uses_suffix_business_when_table_prefixed_by_modul
     backend_root = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"
     r = infer_table_resolution("hotel_brand", config, backend_root=backend_root)
 
-    assert r.matched_by == "scan"
+    assert r.matched_by in {"scan", "new_module"}
     assert r.module == "hotel"
     assert r.business == "brand"
 

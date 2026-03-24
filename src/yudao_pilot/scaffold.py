@@ -191,8 +191,7 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
     class_name = context["entity_name"]
     business_name = context["business_name"]
     module_name = context["module_name"]
-    table_name = context["table_name"]
-    url_path = table_name.replace("_", "-")
+    url_path = business_name.replace("/", "-").replace("_", "-")
     resource_package = resolve_resource_package(context["backend_project"]["type"])
     validation_package = resolve_validation_package(context["backend_project"]["type"])
     base_package = context["backend_codegen_defaults"]["base_package"]
