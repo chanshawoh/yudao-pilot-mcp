@@ -186,6 +186,23 @@
         "src/yudao_pilot/schema.py"
       ],
       "notes": "已完成：1) 清理 vben 项目下 16 个历史测试孤儿文件（根 src/ 8 个 + apps/web-ele/ 8 个）；2) 修复 schema.py 字段过滤，新增 INTERNAL_COLUMNS 排除 delete_token，修复 in_query 排除 base audit 列（update_time / tenant_id 等）；3) 修复 scaffold.py 模板（ServiceImpl 完整 CRUD、Service 返回 DO、Mapper 带 selectPage、Controller 使用 BeanUtils 转换、Mapper XML 去 TODO）；4) 修复已生成的 merchant + merchant_user 共 16 个 Java 文件；5) 修复 ErrorCodeConstants 错误码提示语；6) 确认 writer.py overwrite 策略和 6 种前端写入路径均正确。"
+    },
+    {
+      "id": "T-012",
+      "name": "本地联调收口与业务路由回归",
+      "type": "coding",
+      "status": "in_progress",
+      "depends_on": [
+        "T-011"
+      ],
+      "outputs": [
+        "src/yudao_pilot/scaffold.py",
+        "tests/test_mcp_tools.py",
+        "yudao-projects/yudao-ui-admin-vue3/src/api/hotel/brand/index.ts",
+        "yudao-projects/yudao-ui-admin-vben/apps/web-antd/src/api/hotel/brand/index.ts",
+        "yudao-projects/yudao-ui-admin-vben/apps/web-ele/src/api/hotel/brand/index.ts"
+      ],
+      "notes": "已完成：1) 重新编译并用最新 yudao-server.jar 启动本地后端；2) 修复 hotel_brand 在前端 API 仍按 table_name 生成旧路由的问题，统一改为按 business_name 生成 /hotel/brand 与 /admin-api/hotel/brand；3) 增加回归测试，覆盖 Controller 路由与前端 API 路由生成。待收口：本地联调环境中的文件上传能力由后端文件存储主配置决定，当前先通过人工配置解决，不在本任务内自动改库。"
     }
   ],
   "task_statuses": {
@@ -251,7 +268,8 @@
     "错误码生成在写入阶段自动并入 ErrorCodeConstants.java，不保留 _手动操作.java。",
     "scaffold.py 生成的 ServiceImpl 必须包含完整 CRUD 实现，Service 接口返回 DO，Controller 使用 BeanUtils 做 DO→RespVO 转换。",
     "schema.py 字段过滤新增 INTERNAL_COLUMNS（delete_token 等），in_query 排除 base audit 列（create_time 除外）。",
-    "前端历史测试产物已清理，后续 overwrite=false 可安全防止重复写入。"
+    "前端历史测试产物已清理，后续 overwrite=false 可安全防止重复写入。",
+    "本地联调阶段，文件上传是否可用取决于后端 infra_file_config 的主存储配置；第一优先级先保证代码生成、路由与写入链路稳定。"
   ],
   "open_questions": [
     "错误码业务标题未来是否需要在 config.yaml 中增加显式中文名称字段，避免完全依赖自动推断？"

@@ -491,8 +491,8 @@ def render_frontend_api(
     module_name = context["module_name"]
     entity_name = context["entity_name"]
     lower_name = lower_camel(entity_name)
-    table_name = context["table_name"]
-    url_path = table_name.replace("_", "-")
+    business_name = str(context["business_name"]).strip().strip("/")
+    url_path = business_name.replace("/", "-").replace("_", "-")
     frontend_business_path = (
         frontend_plan.get("frontend_business_path")
         or context.get("generated_file_plan", {}).get("frontend_business_path")

@@ -308,6 +308,44 @@ def test_generate_codegen_scaffold_uses_business_name_for_controller_route(
     assert '@RequestMapping("/hotel/hotel-brand")' not in controller_java["content"]
 
 
+def test_generate_codegen_scaffold_uses_business_name_for_frontend_api_route(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS", "VUE3_VBEN5_ANTD_SCHEMA"),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    vue3_api = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/api/hotel/brand/index.ts")
+        and item["target_type"] == "VUE3_ELEMENT_PLUS"
+    )
+    vben_api = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("apps/web-antd/src/api/hotel/brand/index.ts")
+        and item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
+    )
+
+    assert "/admin-api/hotel/brand/page" in vue3_api["content"]
+    assert "/admin-api/hotel/hotel-brand/page" not in vue3_api["content"]
+    assert "/hotel/brand/page" in vben_api["content"]
+    assert "/hotel/hotel-brand/page" not in vben_api["content"]
+
+
 def test_generate_vben_schema_refines_field_rendering_rules(
     workspace_builder, monkeypatch
 ) -> None:
