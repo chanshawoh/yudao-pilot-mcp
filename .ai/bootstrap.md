@@ -82,6 +82,12 @@ Yudao Pilot 是一个面向 yudao 生态的 MCP 智能开发助手。
 - 后端按原有模块平铺结构写入，不再伪造子模块目录
 - 错误码写入自动合并进 `ErrorCodeConstants.java`
 
+联调启动约定：
+
+- 后端联调默认使用 Maven 打包，再使用 `java -jar` 启动产物
+- 默认命令形态为先执行 `mvn -pl yudao-server -am package`，再执行 `java -jar yudao-server/target/yudao-server.jar --spring.profiles.active=local`
+- 前端联调默认优先使用 `pnpm` 启动，不使用 `npm` / `yarn` 作为默认方案
+
 ## 7. 后端写入规则
 
 后端最终目标不是“生成一套独立子模块”，而是：

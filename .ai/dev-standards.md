@@ -90,7 +90,18 @@
   - 开发工作区夹具
   - 错误码合并
 
-## 10. 变更规范
+## 10. 联调启动规范
+
+- 后端本地联调默认使用 `mvn` 编译产物后，再使用 `java -jar` 启动
+- 推荐命令为：
+  - `mvn -pl yudao-server -am package`
+  - `java -jar yudao-server/target/yudao-server.jar --spring.profiles.active=local`
+- 非必要情况下，不以 `mvn spring-boot:run` 作为默认联调入口
+- 前端本地联调默认优先使用 `pnpm`
+- `yudao-ui-admin-vue3` 使用 `pnpm dev`
+- `yudao-ui-admin-vben` 使用对应 `pnpm dev:*` 脚本
+
+## 11. 变更规范
 
 - 优先使用 `apply_patch` 修改文件
 - 不回退用户已有改动

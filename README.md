@@ -403,6 +403,26 @@ yudao-pilot-mcp/
 
 如果你要本地联调 MCP 工具，直接把该样例作为工作区根目录即可。
 
+本地联调时，当前项目默认采用以下启动约定：
+
+- 后端：先使用 `mvn` 打包，再使用 `java -jar` 启动，不默认使用 `mvn spring-boot:run`
+- 前端：优先使用 `pnpm` 启动，不默认使用 `npm` / `yarn`
+
+后端联调示例：
+
+```bash
+cd yudao-projects/ruoyi-vue-pro-jdk17
+mvn -pl yudao-server -am package
+java -jar yudao-server/target/yudao-server.jar --spring.profiles.active=local
+```
+
+前端联调示例：
+
+```bash
+cd yudao-projects/yudao-ui-admin-vue3
+pnpm dev
+```
+
 ## 当前状态
 
 当前仓库已经完成第一版 MCP 服务骨架，具备以下基础能力：
