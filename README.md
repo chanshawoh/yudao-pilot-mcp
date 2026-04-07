@@ -100,6 +100,7 @@ codegen:
     mode: manual
 
   # 菜单 / 字典 SQL：auto | migration_only | disabled（默认 auto，见下文说明）
+  apply_to_database: false
   menu_sql_mode: auto
   dict_sql_mode: auto
 
@@ -203,14 +204,17 @@ codegen:
   - 实体名
   - 用于实体类、VO、DTO、前端类型名等命名
 
+- `apply_to_database`（可选，默认 `false`）
+  - 控制 **菜单与字典 SQL** 是否允许执行到真实数据库
+  - 该配置优先级最高；未开启时，只生成迁移 SQL，不执行写库
 - `menu_sql_mode`（可选，默认 `auto`）
-  - 控制 **菜单** 相关 MySQL 迁移 SQL 的生成与是否允许写库（配合工具参数 `apply_menu_to_database`）
-  - `auto`：生成菜单 SQL；`write_files` 时写入迁移；`apply_menu_to_database=true` 且菜单尚未存在时写入数据库
-  - `migration_only`：生成菜单 SQL 并可写迁移文件，**永不**把菜单写入数据库
+  - 控制 **菜单** 相关 MySQL 迁移 SQL 是否生成到迁移文件
+  - `auto`：生成菜单 SQL
+  - `migration_only`：兼容值，同样生成菜单 SQL
   - `disabled`：迁移文件中**不包含**菜单 SQL 片段
 
 - `dict_sql_mode`（可选，默认 `auto`）
-  - 控制从表字段注释解析出的 **字典**（`system_dict_type` / `system_dict_data`）迁移 SQL 与写库行为，取值含义同 `menu_sql_mode`
+  - 控制从表字段注释解析出的 **字典**（`system_dict_type` / `system_dict_data`）迁移 SQL 是否生成到迁移文件，取值含义同 `menu_sql_mode`
   - 两者均为 `disabled` 时，MySQL 迁移仅保留一行说明注释；H2 测试 SQL（建表/清理）不受影响
 
 ### 配置解析规则
@@ -272,7 +276,7 @@ AI 应用负责：
 - `compare_codegen_reference_projects` 用来确认 `ruoyi-vue-pro` 和 `ruoyi-vue-pro-jdk17` 的代码生成核心是否可复用
 - `inspect_codegen_context` 会补齐模块名、业务名、实体名、权限标识、后端默认 codegen 配置、前端模板类型、菜单父级候选、生成文件计划和迁移文件建议路径
 - `inspect_table_schema` 会从后端仓库的 MySQL 结构文件中解析指定表的字段信息，供后续字段级代码生成复用
-- `generate_codegen_sql` 会生成 MySQL 菜单迁移 SQL（及字段注释可解析时的字典 SQL），自动合并 H2 `create_tables.sql` / `clean.sql`；在配置为 `auto` 且开启 `apply_menu_to_database` 时，可幂等写入菜单与字典到真实数据库（详见 `codegen.menu_sql_mode` / `codegen.dict_sql_mode`）
+- `generate_codegen_sql` 会生成 MySQL 菜单迁移 SQL（及字段注释可解析时的字典 SQL），自动合并 H2 `create_tables.sql` / `clean.sql`；当 `codegen.apply_to_database=true` 时，可幂等写入菜单与字典到真实数据库
 - `generate_codegen_scaffold` 会基于当前上下文直接生成第一版后端和前端骨架代码，可只预览，也可直接写入工作区
 - `write_mysql_migration` 会把新增 SQL 结构写入 `sql/mysql/migrations/`，文件名采用 Laravel 风格时间戳
 
@@ -286,15 +290,18 @@ AI 应用负责：
 - 把 H2 建表和清理语句幂等合并到对应模块
 - 在配置允许时，把菜单与字典数据幂等执行到真实数据库
 
-**工作区配置**（`codegen.menu_sql_mode`、`codegen.dict_sql_mode`）：
+**工作区配置**（`codegen.apply_to_database`、`codegen.menu_sql_mode`、`codegen.dict_sql_mode`）：
 
-| 取值 | 迁移文件中的 SQL | `apply_menu_to_database=true` 时写库 |
-|------|------------------|----------------------------------------|
-| `auto`（默认） | 生成对应片段 | 会写库（仍受「已存在则跳过」约束） |
-| `migration_only` | 生成对应片段 | **不写库**（仅落迁移文件） |
-| `disabled` | **不包含**该段 | **不写库** |
+| 配置 | SQL 生成行为 | 数据库执行行为 |
+|------|---------------|----------------|
+| `apply_to_database=false`（默认） | 仍生成菜单/字典迁移 SQL | **不写库** |
+| `apply_to_database=true` | 不影响 SQL 生成 | 会写库（仍受「已存在则跳过」约束） |
+| `menu_sql_mode=disabled` | **不包含**菜单 SQL 片段 | 无菜单 SQL 可写 |
+| `dict_sql_mode=disabled` | **不包含**字典 SQL 片段 | 无字典 SQL 可写 |
+| `menu_sql_mode=auto/migration_only` | 生成菜单 SQL 片段 | 是否写库只看 `apply_to_database` |
+| `dict_sql_mode=auto/migration_only` | 生成字典 SQL 片段 | 是否写库只看 `apply_to_database` |
 
-菜单与字典可分别配置，例如仅生成字典迁移、不写库：`menu_sql_mode: migration_only` + `dict_sql_mode: migration_only`。
+菜单与字典可分别禁用生成，例如仅保留菜单迁移：`menu_sql_mode: auto` + `dict_sql_mode: disabled`。
 
 相关工具：
 
@@ -314,9 +321,6 @@ AI 应用负责：
   - 模块根菜单图标，可选，使用 Iconify 字符串，例如 `ep:bicycle`
 - `write_files`
   - 是否把 SQL 文件真实写入仓库
-- `apply_menu_to_database`
-  - 是否尝试将 **菜单与字典**执行到数据库；实际是否写库仍受 `menu_sql_mode` / `dict_sql_mode` 约束（仅 `auto` 会写库）
-
 示例调用思路：
 
 - AI 先根据业务语义确定 `menu_name`、`module_menu_name`

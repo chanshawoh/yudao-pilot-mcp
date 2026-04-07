@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .database import import_pymysql
 from .inspector import resolve_backend_repo_root
 from .models import DatabaseConfig
 
@@ -29,10 +30,12 @@ def inspect_table_schema(
 ) -> dict[str, Any]:
     repo_root = resolve_backend_repo_root(backend_root)
     sql_dump_path = resolve_mysql_schema_dump(repo_root)
+    migration_sqls = find_table_migration_sqls(repo_root, table_name)
     sql_message: str | None = None
     if sql_dump_path is not None:
         schema = parse_table_schema_from_sql(sql_dump_path, table_name)
         if schema is not None:
+            schema["executed_migration_sqls"] = []
             return schema
         sql_message = "在 SQL 结构文件中未找到目标表"
     else:
@@ -43,25 +46,79 @@ def inspect_table_schema(
         try:
             runtime_schema = parse_table_schema_from_database(normalized_db_config, table_name)
         except Exception as exc:
-            db_message = (
-                f"尝试连接真实数据库 {normalized_db_config.database} 失败: "
-                f"{exc.__class__.__name__}: {exc}"
+            return build_unresolved_schema(
+                table_name=table_name,
+                sql_dump_path=sql_dump_path,
+                stop_reason="database_connection_required",
+                executed_migration_sqls=migration_sqls,
+                message=(
+                    f"{sql_message}；无法连接数据库 {normalized_db_config.database}："
+                    f"{exc.__class__.__name__}: {exc}。"
+                    f"{build_database_connection_hint(migration_sqls)}"
+                ),
             )
         else:
             if runtime_schema is not None:
                 runtime_schema["sql_dump_path"] = str(sql_dump_path) if sql_dump_path else None
+                runtime_schema["executed_migration_sqls"] = []
                 return runtime_schema
-            db_message = f"已尝试连接真实数据库 {normalized_db_config.database}，但未找到目标表"
-    else:
-        db_message = "未提供可用数据库连接，暂时无法回退到真实数据库解析"
+            if not migration_sqls:
+                return build_unresolved_schema(
+                    table_name=table_name,
+                    sql_dump_path=sql_dump_path,
+                    stop_reason="table_schema_missing",
+                    executed_migration_sqls=[],
+                    message=(
+                        f"{sql_message}；已尝试连接真实数据库 {normalized_db_config.database}，"
+                        f"但表不存在，且找不到匹配的迁移SQL，请先创建表后再继续。"
+                    ),
+                )
 
-    return {
-        "resolved": False,
-        "table_name": table_name,
-        "sql_dump_path": str(sql_dump_path) if sql_dump_path else None,
-        "message": f"{sql_message}；{db_message}，请 AI 结合迁移文件继续判断",
-        "columns": [],
-    }
+            apply_result = apply_migration_sqls_to_database(
+                normalized_db_config,
+                migration_sqls,
+            )
+            try:
+                runtime_schema = parse_table_schema_from_database(normalized_db_config, table_name)
+            except Exception as exc:
+                return build_unresolved_schema(
+                    table_name=table_name,
+                    sql_dump_path=sql_dump_path,
+                    stop_reason="database_connection_required",
+                    executed_migration_sqls=migration_sqls,
+                    message=(
+                        f"{sql_message}；已执行迁移SQL {format_migration_sqls(migration_sqls)}，"
+                        f"但回读数据库时连接失败：{exc.__class__.__name__}: {exc}。"
+                        "请配置数据库连接后重试。"
+                    ),
+                )
+            if runtime_schema is not None:
+                runtime_schema["sql_dump_path"] = str(sql_dump_path) if sql_dump_path else None
+                runtime_schema["executed_migration_sqls"] = [str(path) for path in migration_sqls]
+                runtime_schema["migration_sync"] = apply_result
+                runtime_schema["message"] = (
+                    f"已执行迁移SQL {format_migration_sqls(migration_sqls)} 创建目标表，"
+                    "并从真实数据库解析表字段"
+                )
+                return runtime_schema
+            return build_unresolved_schema(
+                table_name=table_name,
+                sql_dump_path=sql_dump_path,
+                stop_reason="table_schema_missing",
+                executed_migration_sqls=migration_sqls,
+                message=(
+                    f"{sql_message}；已执行迁移SQL {format_migration_sqls(migration_sqls)}，"
+                    "但仍未找到目标表，请检查迁移SQL内容。"
+                ),
+            )
+    else:
+        return build_unresolved_schema(
+            table_name=table_name,
+            sql_dump_path=sql_dump_path,
+            stop_reason="database_connection_required",
+            executed_migration_sqls=migration_sqls,
+            message=f"{sql_message}；未提供可用数据库连接。{build_database_connection_hint(migration_sqls)}",
+        )
 
 
 def resolve_mysql_schema_dump(repo_root: Path) -> Path | None:
@@ -131,12 +188,7 @@ def normalize_database_config(
 def parse_table_schema_from_database(
     database_config: DatabaseConfig, table_name: str
 ) -> dict[str, Any] | None:
-    try:
-        import pymysql
-        from pymysql.cursors import DictCursor
-    except ModuleNotFoundError:
-        return None
-
+    pymysql = import_pymysql()
     connection = pymysql.connect(
         host=database_config.host,
         port=database_config.port,
@@ -144,7 +196,7 @@ def parse_table_schema_from_database(
         password=database_config.password,
         database=database_config.database,
         charset="utf8mb4",
-        cursorclass=DictCursor,
+        cursorclass=pymysql.cursors.DictCursor,
     )
     try:
         with connection.cursor() as cursor:
@@ -193,6 +245,154 @@ def parse_table_schema_from_database(
         "ai_component_hints": build_ai_component_hints(columns),
         "available_components": AVAILABLE_COMPONENTS,
     }
+
+
+def build_unresolved_schema(
+    *,
+    table_name: str,
+    sql_dump_path: Path | None,
+    stop_reason: str,
+    message: str,
+    executed_migration_sqls: list[Path] | list[str],
+) -> dict[str, Any]:
+    return {
+        "resolved": False,
+        "table_name": table_name,
+        "sql_dump_path": str(sql_dump_path) if sql_dump_path else None,
+        "message": message,
+        "columns": [],
+        "stop_reason": stop_reason,
+        "should_stop": True,
+        "executed_migration_sqls": [str(path) for path in executed_migration_sqls],
+    }
+
+
+def build_database_connection_hint(migration_sqls: list[Path]) -> str:
+    if migration_sqls:
+        return (
+            f"已找到可执行的迁移SQL {format_migration_sqls(migration_sqls)}，"
+            "但当前无法执行，请配置数据库连接后重试。"
+        )
+    return "请配置数据库连接后重试。"
+
+
+def find_table_migration_sqls(repo_root: Path, table_name: str) -> list[Path]:
+    migration_root = repo_root / "sql" / "mysql" / "migrations"
+    if not migration_root.exists():
+        return []
+
+    create_table_pattern = re.compile(
+        rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"]?{re.escape(table_name)}[`\"]?\s*\(",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    for candidate in sorted(migration_root.glob("*.sql")):
+        sql_text = candidate.read_text(encoding="utf-8", errors="ignore")
+        if create_table_pattern.search(sql_text):
+            return [candidate]
+    return []
+
+
+def format_migration_sqls(migration_sqls: list[Path]) -> str:
+    return "、".join(path.name for path in migration_sqls)
+
+
+def apply_migration_sqls_to_database(
+    database_config: DatabaseConfig,
+    migration_sqls: list[Path],
+) -> dict[str, Any]:
+    pymysql = import_pymysql()
+    connection = pymysql.connect(
+        host=database_config.host,
+        port=database_config.port,
+        user=database_config.username,
+        password=database_config.password,
+        database=database_config.database,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
+    )
+    statement_count = 0
+    try:
+        with connection.cursor() as cursor:
+            for migration_path in migration_sqls:
+                sql_text = migration_path.read_text(encoding="utf-8")
+                for statement in split_sql_statements(sql_text):
+                    cursor.execute(statement)
+                    statement_count += 1
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return {
+        "applied": True,
+        "executed_migration_sqls": [str(path) for path in migration_sqls],
+        "statement_count": statement_count,
+    }
+
+
+def split_sql_statements(sql_text: str) -> list[str]:
+    statements: list[str] = []
+    current: list[str] = []
+    in_single = False
+    in_double = False
+    in_backtick = False
+    in_line_comment = False
+    in_block_comment = False
+    index = 0
+    length = len(sql_text)
+
+    while index < length:
+        char = sql_text[index]
+        next_char = sql_text[index + 1] if index + 1 < length else ""
+
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            index += 1
+            continue
+
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+                index += 2
+                continue
+            index += 1
+            continue
+
+        if not (in_single or in_double or in_backtick):
+            if char == "-" and next_char == "-":
+                in_line_comment = True
+                index += 2
+                continue
+            if char == "/" and next_char == "*":
+                in_block_comment = True
+                index += 2
+                continue
+
+        if char == "'" and not (in_double or in_backtick):
+            in_single = not in_single
+        elif char == '"' and not (in_single or in_backtick):
+            in_double = not in_double
+        elif char == "`" and not (in_single or in_double):
+            in_backtick = not in_backtick
+
+        if char == ";" and not (in_single or in_double or in_backtick):
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            index += 1
+            continue
+
+        current.append(char)
+        index += 1
+
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
 
 
 def parse_type_meta(raw_type: str) -> dict[str, Any]:

@@ -1,0 +1,6 @@
+{
+  "last_turn_at": "2026-04-07T08:56:09.933Z",
+  "turn_count": 56,
+  "last_progress_at": "2026-04-07T08:56:09.933Z",
+  "last_agent_output": "**Done**\n- 这轮把 SQL 默认行为切到了新契约：\n  - 默认仍生成菜单/字典迁移 SQL\n  - 新增 `codegen.apply_to_database`\n  - `codegen."
+}

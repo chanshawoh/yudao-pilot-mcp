@@ -75,6 +75,12 @@ def render_frontend_file(
 ) -> str:
     if relative_path.endswith("/index.ts"):
         return render_frontend_api(relative_path, frontend_plan, context)
+    if relative_path.endswith("/components/search-form.vue"):
+        return render_uniapp_search_form(relative_path, context)
+    if relative_path.endswith("/form/index.vue"):
+        return render_uniapp_form(relative_path, context)
+    if relative_path.endswith("/detail/index.vue"):
+        return render_uniapp_detail(relative_path, context)
     if relative_path.endswith("/index.vue"):
         return render_frontend_index(relative_path, frontend_plan, context)
     if relative_path.endswith("Form.vue"):
@@ -83,12 +89,6 @@ def render_frontend_file(
         return render_vben_form(relative_path, frontend_plan, context)
     if relative_path.endswith("/data.ts"):
         return render_vben_data(relative_path, frontend_plan, context)
-    if relative_path.endswith("/components/search-form.vue"):
-        return render_uniapp_search_form(relative_path, context)
-    if relative_path.endswith("/form/index.vue"):
-        return render_uniapp_form(relative_path, context)
-    if relative_path.endswith("/detail/index.vue"):
-        return render_uniapp_detail(relative_path, context)
     return render_plain_placeholder(relative_path, context)
 
 
@@ -192,6 +192,7 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
     business_name = context["business_name"]
     module_name = context["module_name"]
     url_path = business_name.replace("/", "-").replace("_", "-")
+    entity_label = resolve_controller_entity_label(context)
     resource_package = resolve_resource_package(context["backend_project"]["type"])
     validation_package = resolve_validation_package(context["backend_project"]["type"])
     base_package = context["backend_codegen_defaults"]["base_package"]
@@ -207,13 +208,18 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
         import {base_package}.module.{module_name}.controller.admin.{business_name}.vo.{class_name}SaveReqVO;
         import {base_package}.module.{module_name}.dal.dataobject.{business_name}.{class_name}DO;
         import {base_package}.module.{module_name}.service.{business_name}.{class_name}Service;
+        import io.swagger.v3.oas.annotations.Operation;
+        import io.swagger.v3.oas.annotations.Parameter;
+        import io.swagger.v3.oas.annotations.tags.Tag;
         import {resource_package}.Resource;
         import {validation_package}.Valid;
+        import org.springframework.security.access.prepost.PreAuthorize;
         import org.springframework.validation.annotation.Validated;
         import org.springframework.web.bind.annotation.*;
 
         import static {base_package}.framework.common.pojo.CommonResult.success;
 
+        @Tag(name = "管理后台 - {entity_label}")
         @RestController
         @RequestMapping("/{module_name}/{url_path}")
         @Validated
@@ -223,29 +229,41 @@ def render_controller(relative_path: str, context: dict[str, Any]) -> str:
             private {class_name}Service {lower_camel(class_name)}Service;
 
             @PostMapping("/create")
+            @Operation(summary = "新增{entity_label}")
+            @PreAuthorize("@ss.hasPermission('{context["permission_prefix"]}:create')")
             public CommonResult<Long> create{class_name}(@Valid @RequestBody {class_name}SaveReqVO createReqVO) {{
                 return success({lower_camel(class_name)}Service.create{class_name}(createReqVO));
             }}
 
             @PutMapping("/update")
+            @Operation(summary = "修改{entity_label}")
+            @PreAuthorize("@ss.hasPermission('{context["permission_prefix"]}:update')")
             public CommonResult<Boolean> update{class_name}(@Valid @RequestBody {class_name}SaveReqVO updateReqVO) {{
                 {lower_camel(class_name)}Service.update{class_name}(updateReqVO);
                 return success(true);
             }}
 
             @DeleteMapping("/delete")
+            @Operation(summary = "删除{entity_label}")
+            @Parameter(name = "id", description = "编号", required = true, example = "1024")
+            @PreAuthorize("@ss.hasPermission('{context["permission_prefix"]}:delete')")
             public CommonResult<Boolean> delete{class_name}(@RequestParam("id") Long id) {{
                 {lower_camel(class_name)}Service.delete{class_name}(id);
                 return success(true);
             }}
 
             @GetMapping("/get")
+            @Operation(summary = "获得{entity_label}详情")
+            @Parameter(name = "id", description = "编号", required = true, example = "1024")
+            @PreAuthorize("@ss.hasPermission('{context["permission_prefix"]}:query')")
             public CommonResult<{class_name}RespVO> get{class_name}(@RequestParam("id") Long id) {{
                 {class_name}DO {lower_camel(class_name)} = {lower_camel(class_name)}Service.get{class_name}(id);
                 return success(BeanUtils.toBean({lower_camel(class_name)}, {class_name}RespVO.class));
             }}
 
             @GetMapping("/page")
+            @Operation(summary = "获得{entity_label}分页")
+            @PreAuthorize("@ss.hasPermission('{context["permission_prefix"]}:query')")
             public CommonResult<PageResult<{class_name}RespVO>> get{class_name}Page(@Valid {class_name}PageReqVO pageReqVO) {{
                 PageResult<{class_name}DO> pageResult = {lower_camel(class_name)}Service.get{class_name}Page(pageReqVO);
                 return success(BeanUtils.toBean(pageResult, {class_name}RespVO.class));
@@ -509,68 +527,76 @@ def render_frontend_api(
             url_path=url_path,
         )
     if is_uniapp_codegen_type(project_type):
-        return dedent(
-            f"""\
-            import request from '@/config/axios'
-
-            {ts_interface}
-
-            export const get{entity_name}Page = (params: any) => {{
-              return request.get({{
-                url: '/admin-api/{module_name}/{url_path}/page',
-                params,
-              }})
-            }}
-
-            export const get{entity_name} = (id: number) => {{
-              return request.get({{
-                url: '/admin-api/{module_name}/{url_path}/get?id=' + id,
-              }})
-            }}
-
-            export const save{entity_name} = (data: {entity_name}VO) => {{
-              return request.request({{
-                url: '/admin-api/{module_name}/{url_path}/' + (data.id ? 'update' : 'create'),
-                method: data.id ? 'PUT' : 'POST',
-                data,
-              }})
-            }}
-
-            export const delete{entity_name} = (id: number) => {{
-              return request.delete({{
-                url: '/admin-api/{module_name}/{url_path}/delete?id=' + id,
-              }})
-            }}
-            """
+        return (
+            "\n".join(
+                [
+                    "import type { PageParam, PageResult } from '@/http/types'",
+                    "import { http } from '@/http/http'",
+                    "",
+                    ts_interface,
+                    "",
+                    f"export function get{entity_name}Page(params: PageParam) {{",
+                    f"  return http.get<PageResult<{entity_name}VO>>('/{module_name}/{url_path}/page', params)",
+                    "}",
+                    "",
+                    f"export function get{entity_name}(id: number) {{",
+                    f"  return http.get<{entity_name}VO>(`/{module_name}/{url_path}/get?id=${{id}}`)",
+                    "}",
+                    "",
+                    f"export function create{entity_name}(data: {entity_name}VO) {{",
+                    f"  return http.post<number>('/{module_name}/{url_path}/create', data)",
+                    "}",
+                    "",
+                    f"export function update{entity_name}(data: {entity_name}VO) {{",
+                    f"  return http.put<boolean>('/{module_name}/{url_path}/update', data)",
+                    "}",
+                    "",
+                    f"export function delete{entity_name}(id: number) {{",
+                    f"  return http.delete<boolean>(`/{module_name}/{url_path}/delete?id=${{id}}`)",
+                    "}",
+                    "",
+                    f"export function export{entity_name}(params: PageParam) {{",
+                    f"  return http.download('/{module_name}/{url_path}/export-excel', params)",
+                    "}",
+                ]
+            ).strip()
+            + "\n"
         )
-    return dedent(
-        f"""\
-        import request from '@/config/axios'
-
-        {ts_interface}
-
-        export const get{entity_name}Page = async (params: any) => {{
-          return await request.get({{ url: '/admin-api/{module_name}/{url_path}/page', params }})
-        }}
-
-        export const get{entity_name} = async (id: number) => {{
-          return await request.get({{ url: '/admin-api/{module_name}/{url_path}/get', params: {{ id }} }})
-        }}
-
-        export const create{entity_name} = async (data: {entity_name}VO) => {{
-          return await request.post({{ url: '/admin-api/{module_name}/{url_path}/create', data }})
-        }}
-
-        export const update{entity_name} = async (data: {entity_name}VO) => {{
-          return await request.put({{ url: '/admin-api/{module_name}/{url_path}/update', data }})
-        }}
-
-        export const delete{entity_name} = async (id: number) => {{
-          return await request.delete({{ url: '/admin-api/{module_name}/{url_path}/delete', params: {{ id }} }})
-        }}
-
-        export const {lower_name}Permission = '{context["permission_prefix"]}'
-        """
+    return (
+        "\n".join(
+            [
+                "import request from '@/config/axios'",
+                "",
+                ts_interface,
+                "",
+                f"export const get{entity_name}Page = async (params: any) => {{",
+                f"  return await request.get({{ url: '/admin-api/{module_name}/{url_path}/page', params }})",
+                "}",
+                "",
+                f"export const get{entity_name} = async (id: number) => {{",
+                f"  return await request.get({{ url: '/admin-api/{module_name}/{url_path}/get', params: {{ id }} }})",
+                "}",
+                "",
+                f"export const create{entity_name} = async (data: {entity_name}VO) => {{",
+                f"  return await request.post({{ url: '/admin-api/{module_name}/{url_path}/create', data }})",
+                "}",
+                "",
+                f"export const update{entity_name} = async (data: {entity_name}VO) => {{",
+                f"  return await request.put({{ url: '/admin-api/{module_name}/{url_path}/update', data }})",
+                "}",
+                "",
+                f"export const delete{entity_name} = async (id: number) => {{",
+                f"  return await request.delete({{ url: '/admin-api/{module_name}/{url_path}/delete', params: {{ id }} }})",
+                "}",
+                "",
+                f"export const export{entity_name} = async (params: any) => {{",
+                f"  return await request.download({{ url: '/admin-api/{module_name}/{url_path}/export-excel', params }})",
+                "}",
+                "",
+                f"export const {lower_name}Permission = '{context['permission_prefix']}'",
+            ]
+        ).strip()
+        + "\n"
     )
 
 
@@ -627,6 +653,11 @@ def render_vben_api_file(
                 f"export function delete{entity_name}(id: number) {{",
                 f"  return requestClient.delete(`{base_url}/delete?id=${{id}}`);",
                 "}",
+                "",
+                f"/** 导出{entity_label} */",
+                f"export function export{entity_name}(params: PageParam) {{",
+                f"  return requestClient.download('{base_url}/export-excel', {{ params }});",
+                "}",
             ]
         ).strip()
         + "\n"
@@ -644,85 +675,263 @@ def render_frontend_index(
 
 
 def render_vue3_index(relative_path: str, context: dict[str, Any]) -> str:
+    module_name = context["module_name"]
     entity_name = context["entity_name"]
+    entity_label = resolve_frontend_entity_label(context)
     simple_class_name = context["generated_file_plan"]["simple_class_name"]
+    query_fields = get_frontend_query_fields(context)
     list_fields = get_frontend_list_fields(context)
+    query_lines = "\n".join(render_vue3_query_item(field) for field in query_fields)
     column_lines = "\n".join(render_vue3_table_column(field) for field in list_fields)
-    ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
+    query_state = render_vue3_query_state(context)
+    dict_import_line = build_vue3_dict_import_line(query_fields + list_fields)
+    formatter_import_line = (
+        "import { dateFormatter } from '@/utils/formatTime'"
+        if needs_vue3_date_formatter(list_fields)
+        else ""
+    )
     return dedent(
         f"""\
 <template>
   <ContentWrap>
-    <div class="mb-16px text-14px text-[var(--el-text-color-secondary)]">
-      Yudao Pilot 已根据 `{context["table_name"]}` 解析字段并生成首版页面骨架。
-    </div>
-    <el-button type="primary">新增{entity_name}</el-button>
-    <el-table :data="list" class="mt-16px">
+    <el-form
+      ref="queryFormRef"
+      :model="queryParams"
+      :inline="true"
+      label-width="88px"
+      class="-mb-15px"
+    >
+{indent_block(query_lines, "      ")}
+      <el-form-item>
+        <el-button @click="handleQuery">
+          <Icon icon="ep:search" class="mr-5px" /> 搜索
+        </el-button>
+        <el-button @click="resetQuery">
+          <Icon icon="ep:refresh" class="mr-5px" /> 重置
+        </el-button>
+        <el-button
+          type="primary"
+          plain
+          @click="openForm('create')"
+          v-hasPermi="['{context["permission_prefix"]}:create']"
+        >
+          <Icon icon="ep:plus" class="mr-5px" /> 新增
+        </el-button>
+        <el-button
+          type="success"
+          plain
+          @click="handleExport"
+          :loading="exportLoading"
+          v-hasPermi="['{context["permission_prefix"]}:export']"
+        >
+          <Icon icon="ep:download" class="mr-5px" /> 导出
+        </el-button>
+      </el-form-item>
+    </el-form>
+  </ContentWrap>
+
+  <ContentWrap>
+    <el-table v-loading="loading" :data="list" class="mt-16px">
 {indent_block(column_lines, "      ")}
       <el-table-column label="操作" width="160">
-        <template #default>
-          <el-button link type="primary">编辑</el-button>
-          <el-button link type="danger">删除</el-button>
+        <template #default="scope">
+          <el-button
+            link
+            type="primary"
+            @click="openForm('update', scope.row.id)"
+            v-hasPermi="['{context["permission_prefix"]}:update']"
+          >
+            编辑
+          </el-button>
+          <el-button
+            link
+            type="danger"
+            @click="handleDelete(scope.row.id)"
+            v-hasPermi="['{context["permission_prefix"]}:delete']"
+          >
+            删除
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
-    <{simple_class_name}Form ref="formRef" />
+    <Pagination
+      :total="total"
+      v-model:page="queryParams.pageNo"
+      v-model:limit="queryParams.pageSize"
+      @pagination="getList"
+    />
+    <{simple_class_name}Form ref="formRef" @success="getList" />
   </ContentWrap>
 </template>
 
 <script setup lang="ts">
-import {{ ref }} from 'vue'
+import {{ onMounted, reactive, ref }} from 'vue'
+import download from '@/utils/download'
+{dict_import_line}
+{formatter_import_line}
+import {{ delete{entity_name}, export{entity_name}, get{entity_name}Page, {entity_name}VO }} from '@/api/{module_name}/{context["generated_file_plan"]["frontend_business_path"]}'
 import {simple_class_name}Form from './{simple_class_name}Form.vue'
 
-{ts_interface}
-
+const message = useMessage()
+const {{ t }} = useI18n()
+const loading = ref(false)
 const list = ref<{entity_name}VO[]>([])
+const total = ref(0)
+const exportLoading = ref(false)
+const queryFormRef = ref()
+const queryParams = reactive({{
+{indent_block(query_state, "  ")}
+}})
 
-// TODO Yudao Pilot: 继续接入查询条件、权限点和真实接口调用
+const getList = async () => {{
+  loading.value = true
+  try {{
+    const data = await get{entity_name}Page(queryParams)
+    list.value = data.list
+    total.value = data.total
+  }} finally {{
+    loading.value = false
+  }}
+}}
+
+const handleQuery = () => {{
+  queryParams.pageNo = 1
+  getList()
+}}
+
+const resetQuery = () => {{
+  queryFormRef.value?.resetFields()
+  handleQuery()
+}}
+
+const formRef = ref()
+const openForm = (type: string, id?: number) => {{
+  formRef.value?.open(type, id)
+}}
+
+const handleDelete = async (id: number) => {{
+  try {{
+    await message.delConfirm()
+    await delete{entity_name}(id)
+    message.success(t('common.delSuccess'))
+    await getList()
+  }} catch {{}}
+}}
+
+const handleExport = async () => {{
+  try {{
+    await message.exportConfirm()
+    exportLoading.value = true
+    const data = await export{entity_name}(queryParams)
+    download.excel(data, '{entity_label}.xls')
+  }} catch {{}}
+  finally {{
+    exportLoading.value = false
+  }}
+}}
+
+onMounted(() => {{
+  getList()
+}})
 </script>
 """
     ).strip() + "\n"
 
 
 def render_vue3_form(relative_path: str, context: dict[str, Any]) -> str:
+    module_name = context["module_name"]
     entity_name = context["entity_name"]
+    simple_class_name = context["generated_file_plan"]["simple_class_name"]
+    entity_label = resolve_frontend_entity_label(context)
     save_fields = get_frontend_save_fields(context)
     form_items = "\n".join(render_vue3_form_item(field) for field in save_fields)
     form_state = ",\n".join(render_ts_form_state_line(field) for field in save_fields)
+    rules_state = render_vue3_form_rules(save_fields)
+    dict_import_line = build_vue3_dict_import_line(save_fields)
     return dedent(
         f"""\
 <template>
-  <el-dialog v-model="visible" title="{entity_name}表单" width="640px">
-    <el-form :model="formData" label-width="100px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible">
+    <el-form
+      ref="formRef"
+      :model="formData"
+      :rules="formRules"
+      label-width="100px"
+      v-loading="formLoading"
+    >
 {indent_block(form_items, "      ")}
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" @click="handleSubmit">保存</el-button>
+      <el-button type="primary" :disabled="formLoading" @click="submitForm">确 定</el-button>
+      <el-button @click="dialogVisible = false">取 消</el-button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import {{ reactive, ref }} from 'vue'
+{dict_import_line}
+import {{ create{entity_name}, get{entity_name}, update{entity_name} }} from '@/api/{module_name}/{context["generated_file_plan"]["frontend_business_path"]}'
+import type {{ {entity_name}VO }} from '@/api/{module_name}/{context["generated_file_plan"]["frontend_business_path"]}'
 
-const visible = ref(false)
-const formData = reactive({{
+defineOptions({{ name: '{simple_class_name}Form' }})
+
+const emit = defineEmits(['success'])
+const {{ t }} = useI18n()
+const message = useMessage()
+const dialogVisible = ref(false)
+const dialogTitle = ref('{entity_label}')
+const formLoading = ref(false)
+const formType = ref('')
+const formData = ref({{
   id: undefined as number | undefined,
 {indent_block(form_state, "  ")}
 }})
+const formRules = reactive({{
+{indent_block(rules_state, "  ")}
+}})
+const formRef = ref()
 
-const open = (data?: Partial<typeof formData>) => {{
-  Object.assign(formData, {{
+const resetForm = () => {{
+  formData.value = {{
     id: undefined as number | undefined,
 {indent_block(form_state, "    ")}
-  }}, data)
-  visible.value = true
+  }}
+  formRef.value?.resetFields()
 }}
 
-const handleSubmit = () => {{
-  // TODO Yudao Pilot: 接入 save API，并结合字段规则补齐校验
-  visible.value = false
+const open = async (type: string, id?: number) => {{
+  dialogVisible.value = true
+  dialogTitle.value = type === 'create' ? '新增{entity_label}' : '编辑{entity_label}'
+  formType.value = type
+  resetForm()
+  if (id) {{
+    formLoading.value = true
+    try {{
+      formData.value = await get{entity_name}(id)
+    }} finally {{
+      formLoading.value = false
+    }}
+  }}
+}}
+
+const submitForm = async () => {{
+  await formRef.value.validate()
+  formLoading.value = true
+  try {{
+    const data = formData.value as {entity_name}VO
+    if (formType.value === 'create') {{
+      await create{entity_name}(data)
+      message.success(t('common.createSuccess'))
+    }} else {{
+      await update{entity_name}(data)
+      message.success(t('common.updateSuccess'))
+    }}
+    dialogVisible.value = false
+    emit('success')
+  }} finally {{
+    formLoading.value = false
+  }}
 }}
 
 defineExpose({{ open }})
@@ -815,7 +1024,7 @@ def render_vben_index(
         feedback_import,
         "",
         "import { ACTION_ICON, TableAction, useVbenVxeGrid } from '#/adapter/vxe-table';",
-        f"import {{ delete{entity_name}, get{entity_name}Page }} from '{api_import_path}';",
+        f"import {{ delete{entity_name}, export{entity_name}, get{entity_name}Page }} from '{api_import_path}';",
         "import { $t } from '#/locales';",
         "",
     ]
@@ -850,6 +1059,10 @@ def render_vben_index(
     lines.extend(delete_handler.splitlines())
     lines.extend(
         [
+            "",
+            "async function handleExport() {",
+            f"  await export{entity_name}(gridApi.formApi?.getValues?.() ?? {{}});",
+            "}",
             "",
             "const [Grid, gridApi] = useVbenVxeGrid({",
             "  formOptions: {",
@@ -890,6 +1103,7 @@ def render_vben_index(
             "        <TableAction",
             "          :actions=\"[",
             f"            {{ label: $t('ui.actionTitle.create', ['{entity_label}']), type: 'primary', icon: ACTION_ICON.ADD, auth: ['{context['permission_prefix']}:create'], onClick: handleCreate }},",
+            f"            {{ label: $t('common.export'), icon: ACTION_ICON.EXPORT, auth: ['{context['permission_prefix']}:export'], onClick: handleExport }},",
             "          ]\"",
             "        />",
             "      </template>",
@@ -1090,117 +1304,450 @@ def render_vben_data(
 
 def render_uniapp_index(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
+    module_name = context["module_name"]
+    business_name = context["business_name"]
+    entity_label = resolve_frontend_entity_label(context)
     preview_field = next(
         (field for field in get_frontend_list_fields(context) if field["java_field"] != "id"),
         None,
     )
     preview_expr = f"item.{preview_field['java_field']}" if preview_field else "item.id"
-    ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
     return dedent(
         f"""\
-        <template>
-          <view class="page">
-            <view class="page__header">
-              <text class="page__title">{entity_name}列表</text>
-            </view>
-            <search-form />
-            <view class="card" v-for="item in list" :key="item.id">
-              <text class="card__title">#{{{{ item.id }}}}</text>
-              <text class="card__desc">{{{{ {preview_expr} || '待补齐字段' }}}}</text>
+<template>
+  <view class="yd-page-container">
+    <wd-navbar
+      title="{entity_label}管理"
+      left-arrow placeholder safe-area-inset-top fixed
+      @click-left="handleBack"
+    />
+
+    <SearchForm @search="handleQuery" @reset="handleReset" />
+
+    <view class="p-24rpx">
+      <view
+        v-for="item in list"
+        :key="item.id"
+        class="mb-24rpx overflow-hidden rounded-12rpx bg-white shadow-sm"
+        @click="handleDetail(item)"
+      >
+        <view class="p-24rpx">
+          <view class="mb-16rpx flex items-center justify-between">
+            <view class="text-32rpx text-[#333] font-semibold">
+              {{{{ item.id }}}}
             </view>
           </view>
-        </template>
+          <view class="mb-12rpx flex items-center text-28rpx text-[#666]">
+            <text class="mr-8rpx text-[#999]">预览：</text>
+            <text class="line-clamp-1">{{{{ {preview_expr} || '-' }}}}</text>
+          </view>
+        </view>
+      </view>
 
-        <script setup lang="ts">
-        import {{ ref }} from 'vue'
-        import SearchForm from './components/search-form.vue'
+      <view v-if="loadMoreState !== 'loading' && list.length === 0" class="py-100rpx text-center">
+        <wd-status-tip image="content" tip="暂无{entity_label}数据" />
+      </view>
+      <wd-loadmore
+        v-if="list.length > 0"
+        :state="loadMoreState"
+        @reload="loadMore"
+      />
+    </view>
 
-        {ts_interface}
+    <wd-fab
+      v-if="hasAccessByCodes(['{context["permission_prefix"]}:create'])"
+      position="right-bottom"
+      type="primary"
+      :expandable="false"
+      @click="handleAdd"
+    />
+  </view>
+</template>
 
-        const list = ref<{entity_name}VO[]>([])
-        </script>
+<script lang="ts" setup>
+import type {{ LoadMoreState, PageParam, PageResult }} from '@/http/types'
+import type {{ {entity_name} }} from '@/api/{module_name}/{business_name}'
+import {{ onMounted, ref }} from 'vue'
+import {{ onReachBottom }} from '@dcloudio/uni-app'
+import {{ get{entity_name}Page }} from '@/api/{module_name}/{business_name}'
+import {{ useAccess }} from '@/hooks/useAccess'
+import {{ navigateBackPlus }} from '@/utils'
+import SearchForm from './components/search-form.vue'
 
-        <style scoped>
-        .page {{ padding: 24rpx; }}
-        .page__header {{ margin-bottom: 24rpx; }}
-        .page__title {{ font-size: 34rpx; font-weight: 600; }}
-        .card {{ margin-top: 20rpx; padding: 24rpx; border-radius: 20rpx; background: #ffffff; }}
-        .card__title {{ display: block; font-weight: 600; }}
-        .card__desc {{ display: block; margin-top: 12rpx; color: #666666; }}
-        </style>
-        """
+definePage({{
+  style: {{
+    navigationBarTitleText: '',
+    navigationStyle: 'custom',
+  }},
+}})
+
+const {{ hasAccessByCodes }} = useAccess()
+const total = ref(0)
+const list = ref<{entity_name}[]>([])
+const loadMoreState = ref<LoadMoreState>('loading')
+const queryParams = ref<PageParam>({{
+  pageNo: 1,
+  pageSize: 10,
+}})
+
+function handleBack() {{
+  navigateBackPlus()
+}}
+
+async function getList() {{
+  loadMoreState.value = 'loading'
+  try {{
+    const data = await get{entity_name}Page(queryParams.value)
+    list.value = [...list.value, ...data.list]
+    total.value = data.total
+    loadMoreState.value = list.value.length >= total.value ? 'finished' : 'loading'
+  }} catch {{
+    queryParams.value.pageNo = queryParams.value.pageNo > 1 ? queryParams.value.pageNo - 1 : 1
+    loadMoreState.value = 'error'
+  }}
+}}
+
+function handleQuery(data?: Record<string, any>) {{
+  queryParams.value = {{
+    ...data,
+    pageNo: 1,
+    pageSize: queryParams.value.pageSize,
+  }}
+  list.value = []
+  getList()
+}}
+
+function handleReset() {{
+  handleQuery()
+}}
+
+function loadMore() {{
+  if (loadMoreState.value === 'finished') {{
+    return
+  }}
+  queryParams.value.pageNo++
+  getList()
+}}
+
+function handleAdd() {{
+  uni.navigateTo({{
+    url: '/pages-{module_name}/{business_name}/form/index',
+  }})
+}}
+
+function handleDetail(item: {entity_name}) {{
+  uni.navigateTo({{
+    url: `/pages-{module_name}/{business_name}/detail/index?id=${{item.id}}`,
+  }})
+}}
+
+onReachBottom(() => {{
+  loadMore()
+}})
+
+onMounted(() => {{
+  getList()
+}})
+</script>
+
+<style lang="scss" scoped>
+</style>
+"""
     )
 
 
 def render_uniapp_search_form(relative_path: str, context: dict[str, Any]) -> str:
     query_fields = get_frontend_query_fields(context)
-    input_fields = "\n".join(render_uniapp_search_item(field) for field in query_fields[:3]) or '    <input class="search-input" placeholder="请输入关键字" />'
+    input_fields = "\n".join(render_uniapp_search_item(field) for field in query_fields[:3]) or '      <wd-input v-model="formData.keyword" placeholder="请输入关键字" clearable />'
     return dedent(
         f"""\
-        <template>
-          <view class="search-box">
-        {input_fields}
-          </view>
-        </template>
+<template>
+  <view @click="visible = true">
+    <wd-search :placeholder="placeholder" hide-cancel disabled />
+  </view>
 
-        <style scoped>
-        .search-box {{ margin-bottom: 24rpx; }}
-        .search-input {{ height: 72rpx; padding: 0 24rpx; border-radius: 16rpx; background: #f5f7fa; }}
-        </style>
-        """
+  <wd-popup v-model="visible" position="top" @close="visible = false">
+    <view class="yd-search-form-container" :style="{{ paddingTop: `${{getNavbarHeight()}}px` }}">
+{indent_block(input_fields, "      ")}
+      <view class="yd-search-form-actions">
+        <wd-button class="flex-1" plain @click="handleReset">
+          重置
+        </wd-button>
+        <wd-button class="flex-1" type="primary" @click="handleSearch">
+          搜索
+        </wd-button>
+      </view>
+    </view>
+  </wd-popup>
+</template>
+
+<script lang="ts" setup>
+import {{ computed, reactive, ref }} from 'vue'
+import {{ getNavbarHeight }} from '@/utils'
+
+const emit = defineEmits<{{
+  search: [data: Record<string, any>]
+  reset: []
+}}>()
+
+const visible = ref(false)
+const formData = reactive({{
+{indent_block(render_uniapp_search_state(query_fields), "  ")}
+}})
+
+const placeholder = computed(() => '搜索')
+
+function handleSearch() {{
+  visible.value = false
+  emit('search', {{ ...formData }})
+}}
+
+function handleReset() {{
+{indent_block(render_uniapp_search_reset(query_fields), "  ")}
+  visible.value = false
+  emit('reset')
+}}
+</script>
+
+<style lang="scss" scoped>
+</style>
+"""
     )
 
 
 def render_uniapp_form(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
+    module_name = context["module_name"]
+    business_name = context["business_name"]
+    entity_label = resolve_frontend_entity_label(context)
     save_fields = get_frontend_save_fields(context)
-    form_items = "\n".join(render_uniapp_form_item(field) for field in save_fields[:6]) or '    <textarea class="textarea" placeholder="请输入备注" />'
+    form_items = "\n".join(render_uniapp_form_item(field) for field in save_fields[:6]) or '          <wd-input v-model="formData.remark" label="备注" label-width="180rpx" placeholder="请输入备注" />'
     return dedent(
         f"""\
-        <template>
-          <view class="page">
-            <text class="title">{entity_name}表单</text>
-        {form_items}
-          </view>
-        </template>
+<template>
+  <view class="yd-page-container">
+    <wd-navbar
+      :title="getTitle"
+      left-arrow placeholder safe-area-inset-top fixed
+      @click-left="handleBack"
+    />
 
-        <style scoped>
-        .page {{ padding: 24rpx; }}
-        .title {{ display: block; margin-bottom: 24rpx; font-size: 34rpx; font-weight: 600; }}
-        .input {{ height: 72rpx; margin-bottom: 20rpx; padding: 0 24rpx; border-radius: 16rpx; background: #f5f7fa; }}
-        .textarea {{ width: 100%; min-height: 240rpx; padding: 24rpx; border-radius: 16rpx; background: #f5f7fa; }}
-        </style>
-        """
+    <view>
+      <wd-form ref="formRef" :model="formData" :rules="formRules">
+        <wd-cell-group border>
+{indent_block(form_items, "          ")}
+        </wd-cell-group>
+      </wd-form>
+    </view>
+
+    <view class="yd-detail-footer">
+      <wd-button
+        type="primary"
+        block
+        :loading="formLoading"
+        @click="handleSubmit"
+      >
+        保存
+      </wd-button>
+    </view>
+  </view>
+</template>
+
+<script lang="ts" setup>
+import type {{ FormInstance }} from 'wot-design-uni/components/wd-form/types'
+import type {{ {entity_name} }} from '@/api/{module_name}/{business_name}'
+import {{ computed, onMounted, ref }} from 'vue'
+import {{ useToast }} from 'wot-design-uni'
+import {{ create{entity_name}, get{entity_name}, update{entity_name} }} from '@/api/{module_name}/{business_name}'
+import {{ navigateBackPlus }} from '@/utils'
+
+const props = defineProps<{{
+  id?: number | any
+}}>()
+
+definePage({{
+  style: {{
+    navigationBarTitleText: '',
+    navigationStyle: 'custom',
+  }},
+}})
+
+const toast = useToast()
+const getTitle = computed(() => props.id ? '编辑{entity_label}' : '新增{entity_label}')
+const formLoading = ref(false)
+const formData = ref<{entity_name}>({{
+{indent_block(render_uniapp_form_state(save_fields), "  ")}
+}})
+const formRules = {{
+{indent_block(render_uniapp_form_rules(save_fields), "  ")}
+}}
+const formRef = ref<FormInstance>()
+
+function handleBack() {{
+  navigateBackPlus('/pages-{module_name}/{business_name}/index')
+}}
+
+async function getDetail() {{
+  if (!props.id) {{
+    return
+  }}
+  formData.value = await get{entity_name}(props.id)
+}}
+
+async function handleSubmit() {{
+  const {{ valid }} = await formRef.value.validate()
+  if (!valid) {{
+    return
+  }}
+
+  formLoading.value = true
+  try {{
+    if (props.id) {{
+      await update{entity_name}(formData.value)
+      toast.success('修改成功')
+    }} else {{
+      await create{entity_name}(formData.value)
+      toast.success('新增成功')
+    }}
+    setTimeout(() => {{
+      handleBack()
+    }}, 500)
+  }} finally {{
+    formLoading.value = false
+  }}
+}}
+
+onMounted(() => {{
+  getDetail()
+}})
+</script>
+
+<style lang="scss" scoped>
+</style>
+"""
     )
 
 
 def render_uniapp_detail(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
+    module_name = context["module_name"]
+    business_name = context["business_name"]
+    entity_label = resolve_frontend_entity_label(context)
     rows = "\n".join(render_uniapp_detail_row(field) for field in get_resp_fields(context)[:8])
-    ts_interface = render_ts_interface(entity_name + "VO", get_resp_fields(context))
     return dedent(
         f"""\
-        <template>
-          <view class="page">
-            <text class="title">{entity_name}详情</text>
-        {rows}
-          </view>
-        </template>
+<template>
+  <view class="yd-page-container">
+    <wd-navbar
+      title="{entity_label}详情"
+      left-arrow placeholder safe-area-inset-top fixed
+      @click-left="handleBack"
+    />
 
-        <script setup lang="ts">
-        import {{ ref }} from 'vue'
+    <view>
+      <wd-cell-group border>
+{indent_block(rows, "        ")}
+      </wd-cell-group>
+    </view>
 
-        {ts_interface}
+    <view class="yd-detail-footer">
+      <view class="yd-detail-footer-actions">
+        <wd-button
+          v-if="hasAccessByCodes(['{context["permission_prefix"]}:update'])"
+          class="flex-1" type="warning" @click="handleEdit"
+        >
+          编辑
+        </wd-button>
+        <wd-button
+          v-if="hasAccessByCodes(['{context["permission_prefix"]}:delete'])"
+          class="flex-1" type="error" :loading="deleting" @click="handleDelete"
+        >
+          删除
+        </wd-button>
+      </view>
+    </view>
+  </view>
+</template>
 
-        const detail = ref<{entity_name}VO | null>(null)
-        </script>
+<script lang="ts" setup>
+import type {{ {entity_name} }} from '@/api/{module_name}/{business_name}'
+import {{ onMounted, ref }} from 'vue'
+import {{ useToast }} from 'wot-design-uni'
+import {{ delete{entity_name}, get{entity_name} }} from '@/api/{module_name}/{business_name}'
+import {{ useAccess }} from '@/hooks/useAccess'
+import {{ navigateBackPlus }} from '@/utils'
 
-        <style scoped>
-        .page {{ padding: 24rpx; }}
-        .title {{ display: block; margin-bottom: 24rpx; font-size: 34rpx; font-weight: 600; }}
-        .row {{ display: flex; justify-content: space-between; margin-bottom: 16rpx; color: #666666; }}
-        </style>
-        """
+const props = defineProps<{{
+  id?: number | any
+}}>()
+
+definePage({{
+  style: {{
+    navigationBarTitleText: '',
+    navigationStyle: 'custom',
+  }},
+}})
+
+const {{ hasAccessByCodes }} = useAccess()
+const toast = useToast()
+const detail = ref<{entity_name} | null>(null)
+const deleting = ref(false)
+
+function handleBack() {{
+  navigateBackPlus('/pages-{module_name}/{business_name}/index')
+}}
+
+async function getDetail() {{
+  if (!props.id) {{
+    return
+  }}
+  try {{
+    toast.loading('加载中...')
+    detail.value = await get{entity_name}(props.id)
+  }} finally {{
+    toast.close()
+  }}
+}}
+
+function handleEdit() {{
+  uni.navigateTo({{
+    url: `/pages-{module_name}/{business_name}/form/index?id=${{props.id}}`,
+  }})
+}}
+
+function handleDelete() {{
+  if (!props.id) {{
+    return
+  }}
+  uni.showModal({{
+    title: '提示',
+    content: '确定要删除该{entity_label}吗？',
+    success: async (res) => {{
+      if (!res.confirm) {{
+        return
+      }}
+      deleting.value = true
+      try {{
+        await delete{entity_name}(props.id)
+        toast.success('删除成功')
+        setTimeout(() => {{
+          handleBack()
+        }}, 500)
+      }} finally {{
+        deleting.value = false
+      }}
+    }},
+  }})
+}}
+
+onMounted(() => {{
+  getDetail()
+}})
+</script>
+
+<style lang="scss" scoped>
+</style>
+"""
     )
 
 
@@ -1484,6 +2031,20 @@ def render_ts_interface(name: str, fields: list[dict[str, Any]]) -> str:
 def render_vue3_table_column(field: dict[str, Any]) -> str:
     label = sanitize_column_comment(field["column_comment"])
     width = "120" if field["ts_type"] == "number" or field["java_field"] == "id" else "180"
+    if normalize_java_field_type(field) in {"LocalDateTime", "LocalDate"}:
+        return (
+            f'              <el-table-column label="{label}" prop="{field["java_field"]}" '
+            f':formatter="dateFormatter" width="180px" />'
+        )
+    dict_type_expr = render_vue3_dict_type_expr(field)
+    if dict_type_expr:
+        return (
+            f'              <el-table-column label="{label}" align="center" prop="{field["java_field"]}">\n'
+            "                <template #default=\"scope\">\n"
+            f'                  <dict-tag :type="{dict_type_expr}" :value="scope.row.{field["java_field"]}" />\n'
+            "                </template>\n"
+            "              </el-table-column>"
+        )
     return f'              <el-table-column label="{label}" prop="{field["java_field"]}" width="{width}" />'
 
 
@@ -1492,15 +2053,206 @@ def render_vue3_form_item(field: dict[str, Any]) -> str:
     model = f'formData.{field["java_field"]}'
     placeholder = escape_html_attr(f"请输入{label}")
     html_type = field["html_type"]
+    dict_options_expr = render_vue3_dict_options_expr(field)
+    inline_options = build_vben_inline_options(field)
     if html_type in {"textarea"}:
         control = f'<el-input v-model="{model}" type="textarea" placeholder="{placeholder}" />'
+    elif html_type == "editor":
+        control = f'<Editor v-model="{model}" height="150px" />'
+    elif html_type in {"imageUpload", "image-upload"}:
+        control = f'<UploadImg v-model="{model}" />'
+    elif html_type in {"fileUpload", "file-upload"}:
+        control = f'<UploadFile v-model="{model}" />'
     elif html_type in {"datetime", "date"}:
         value_type = ' value-format="YYYY-MM-DD HH:mm:ss"' if html_type == "datetime" else ' value-format="YYYY-MM-DD"'
         picker_type = "datetime" if html_type == "datetime" else "date"
         control = f'<el-date-picker v-model="{model}" type="{picker_type}" placeholder="{placeholder}"{value_type} />'
+    elif html_type == "radio":
+        control = render_vue3_form_options_control(
+            model=model,
+            field=field,
+            tag_name="el-radio",
+            wrapper="el-radio-group",
+            dict_options_expr=dict_options_expr,
+            inline_options=inline_options,
+        )
+    elif html_type == "checkbox":
+        control = render_vue3_form_options_control(
+            model=model,
+            field=field,
+            tag_name="el-checkbox",
+            wrapper="el-checkbox-group",
+            dict_options_expr=dict_options_expr,
+            inline_options=inline_options,
+        )
+    elif html_type == "select":
+        control = render_vue3_select_control(model, field, dict_options_expr, inline_options, include_all_option=False)
+    elif html_type == "inputNumber" or field["ts_type"] == "number":
+        control = f'<el-input-number v-model="{model}" placeholder="{placeholder}" class="!w-1/1" />'
     else:
         control = f'<el-input v-model="{model}" placeholder="{placeholder}" />'
     return f'              <el-form-item label="{label}">\n                {control}\n              </el-form-item>'
+
+
+def render_vue3_query_item(field: dict[str, Any]) -> str:
+    label = sanitize_column_comment(field["column_comment"])
+    model = f'queryParams.{field["java_field"]}'
+    placeholder = escape_html_attr(f"请输入{label}")
+    html_type = field["html_type"]
+    dict_options_expr = render_vue3_dict_options_expr(field)
+    inline_options = build_vben_inline_options(field)
+    if html_type in {"select", "radio"}:
+        control = render_vue3_select_control(model, field, dict_options_expr, inline_options, include_all_option=True)
+    elif html_type in {"datetime", "date"}:
+        control = (
+            f'<el-date-picker v-model="{model}" type="daterange" '
+            f'value-format="{"YYYY-MM-DD HH:mm:ss" if html_type == "datetime" else "YYYY-MM-DD"}" '
+            f'start-placeholder="开始{label}" end-placeholder="结束{label}" class="!w-240px" />'
+        )
+    else:
+        control = (
+            f'<el-input v-model="{model}" placeholder="{placeholder}" clearable '
+            '@keyup.enter="handleQuery" class="!w-240px" />'
+        )
+    return f'      <el-form-item label="{label}" prop="{field["java_field"]}">\n        {control}\n      </el-form-item>'
+
+
+def render_vue3_query_state(context: dict[str, Any]) -> str:
+    fields = get_frontend_query_fields(context)
+    lines = ["pageNo: 1,", "pageSize: 10,"]
+    for field in fields:
+        value = "[]" if field["html_type"] in {"datetime", "date"} else "undefined"
+        lines.append(f'{field["java_field"]}: {value},')
+    return "\n".join(lines)
+
+
+def render_vue3_form_rules(fields: list[dict[str, Any]]) -> str:
+    rules: list[str] = []
+    for field in fields:
+        if field.get("nullable"):
+            continue
+        trigger = "change" if field["html_type"] in {"select", "radio", "checkbox", "datetime", "date"} else "blur"
+        rules.append(
+            f"{field['java_field']}: [{{ required: true, message: '{sanitize_column_comment(field['column_comment'])}不能为空', trigger: '{trigger}' }}],"
+        )
+    return "\n".join(rules)
+
+
+def build_vue3_dict_import_line(fields: list[dict[str, Any]]) -> str:
+    return (
+        "import { getIntDictOptions, getStrDictOptions, getBoolDictOptions, DICT_TYPE } from '@/utils/dict'"
+        if any(render_vue3_dict_options_expr(field) for field in fields)
+        else ""
+    )
+
+
+def needs_vue3_date_formatter(fields: list[dict[str, Any]]) -> bool:
+    return any(normalize_java_field_type(field) in {"LocalDateTime", "LocalDate"} for field in fields)
+
+
+def render_vue3_dict_options_expr(field: dict[str, Any]) -> str | None:
+    dict_type = infer_vben_dict_type(field)
+    generated_dict_type = infer_vben_generated_dict_type(field)
+    method = resolve_vue3_dict_method(field)
+    if dict_type:
+        return f"{method}(DICT_TYPE.{dict_type})"
+    if generated_dict_type:
+        return f"{method}('{generated_dict_type}')"
+    return None
+
+
+def render_vue3_dict_type_expr(field: dict[str, Any]) -> str | None:
+    dict_type = infer_vben_dict_type(field)
+    generated_dict_type = infer_vben_generated_dict_type(field)
+    if dict_type:
+        return f"DICT_TYPE.{dict_type}"
+    if generated_dict_type:
+        return f"'{generated_dict_type}'"
+    return None
+
+
+def resolve_vue3_dict_method(field: dict[str, Any]) -> str:
+    if field["ts_type"] == "number":
+        return "getIntDictOptions"
+    if field["ts_type"] == "boolean":
+        return "getBoolDictOptions"
+    return "getStrDictOptions"
+
+
+def render_vue3_select_control(
+    model: str,
+    field: dict[str, Any],
+    dict_options_expr: str | None,
+    inline_options: list[dict[str, Any]],
+    *,
+    include_all_option: bool,
+) -> str:
+    label = sanitize_column_comment(field["column_comment"])
+    option_lines: list[str] = []
+    if include_all_option:
+        option_lines.append('          <el-option label="全部" value="" />')
+    if dict_options_expr:
+        option_lines.extend(
+            [
+                f'          <el-option v-for="dict in {dict_options_expr}" :key="dict.value" :label="dict.label" :value="dict.value" />',
+            ]
+        )
+    else:
+        option_lines.extend(render_vue3_inline_option_lines(inline_options))
+    return (
+        f'<el-select v-model="{model}" placeholder="请选择{label}" clearable class="!w-240px">\n'
+        + "\n".join(option_lines)
+        + "\n        </el-select>"
+    )
+
+
+def render_vue3_form_options_control(
+    *,
+    model: str,
+    field: dict[str, Any],
+    tag_name: str,
+    wrapper: str,
+    dict_options_expr: str | None,
+    inline_options: list[dict[str, Any]],
+) -> str:
+    option_lines: list[str] = []
+    if dict_options_expr:
+        option_lines.append(
+            f'          <{tag_name} v-for="dict in {dict_options_expr}" :key="dict.value" :label="dict.value">'
+        )
+        option_lines.append("            {{ dict.label }}")
+        option_lines.append(f"          </{tag_name}>")
+    else:
+        option_lines.extend(render_vue3_inline_choice_lines(tag_name, inline_options))
+    return f'<{wrapper} v-model="{model}">\n' + "\n".join(option_lines) + f"\n        </{wrapper}>"
+
+
+def render_vue3_inline_option_lines(options: list[dict[str, Any]]) -> list[str]:
+    return [
+        f'          <el-option label="{escape_html_attr(str(option["label"]))}" {render_vue3_bound_value_attr(option["value"])} />'
+        for option in options
+    ]
+
+
+def render_vue3_inline_choice_lines(tag_name: str, options: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for option in options:
+        lines.append(
+            f'          <{tag_name} {render_vue3_bound_label_attr(option["value"])}>'
+        )
+        lines.append(f'            {escape_html_attr(str(option["label"]))}')
+        lines.append(f"          </{tag_name}>")
+    return lines
+
+
+def render_vue3_bound_value_attr(value: str | int | bool) -> str:
+    rendered = render_vben_option_value(value)
+    return f':value="{rendered}"'
+
+
+def render_vue3_bound_label_attr(value: str | int | bool) -> str:
+    rendered = render_vben_option_value(value)
+    return f':label="{rendered}"'
 
 
 def render_ts_form_state_line(field: dict[str, Any]) -> str:
@@ -1763,6 +2515,10 @@ def resolve_frontend_entity_label(context: dict[str, Any]) -> str:
     return context["entity_name"]
 
 
+def resolve_controller_entity_label(context: dict[str, Any]) -> str:
+    return resolve_frontend_entity_label(context)
+
+
 def render_vben_api_interface_body(fields: list[dict[str, Any]]) -> str:
     effective_fields = fields or [
         {
@@ -2010,23 +2766,90 @@ def escape_js_string(value: str) -> str:
 def render_uniapp_search_item(field: dict[str, Any]) -> str:
     label = sanitize_column_comment(field['column_comment'])
     placeholder = escape_html_attr(f"请输入{label}")
-    return f'    <input class="search-input" placeholder="{placeholder}" />'
+    return f'      <wd-input v-model="formData.{field["java_field"]}" placeholder="{placeholder}" clearable />'
 
 
 def render_uniapp_form_item(field: dict[str, Any]) -> str:
     label = sanitize_column_comment(field['column_comment'])
     placeholder = escape_html_attr(f"请输入{label}")
-    if field["html_type"] == "textarea":
-        return f'    <textarea class="textarea" placeholder="{placeholder}" />'
-    return f'    <input class="input" placeholder="{placeholder}" />'
+    model = f"formData.{field['java_field']}"
+    html_type = field["html_type"]
+    if html_type in {"select", "radio"}:
+        return (
+            f'          <wd-cell title="{label}" title-width="180rpx" prop="{field["java_field"]}" center>\n'
+            f'            <wd-radio-group v-model="{model}" shape="button">\n'
+            "              <wd-radio :value=\"1\">选项一</wd-radio>\n"
+            "              <wd-radio :value=\"0\">选项二</wd-radio>\n"
+            "            </wd-radio-group>\n"
+            "          </wd-cell>"
+        )
+    if html_type == "textarea":
+        return (
+            f'          <wd-textarea v-model="{model}" label="{label}" label-width="180rpx" '
+            f'placeholder="{placeholder}" :maxlength="200" show-word-limit clearable />'
+        )
+    if html_type in {"datetime", "date"}:
+        picker_type = "datetime" if html_type == "datetime" else "date"
+        return (
+            f'          <wd-datetime-picker v-model="{model}" type="{picker_type}" '
+            f'label="{label}" label-width="180rpx" prop="{field["java_field"]}" />'
+        )
+    if html_type == "inputNumber" or field["ts_type"] == "number":
+        return (
+            f'          <wd-cell title="{label}" title-width="180rpx" prop="{field["java_field"]}" center>\n'
+            f'            <wd-input-number v-model="{model}" :min="0" />\n'
+            "          </wd-cell>"
+        )
+    return (
+        f'          <wd-input v-model="{model}" label="{label}" label-width="180rpx" '
+        f'prop="{field["java_field"]}" clearable placeholder="{placeholder}" />'
+    )
 
 
 def render_uniapp_detail_row(field: dict[str, Any]) -> str:
     label = sanitize_column_comment(field["column_comment"])
-    return (
-        f'    <view class="row"><text>{label}</text>'
-        f'<text>{{{{ detail?.{field["java_field"]} ?? "-" }}}}</text></view>'
+    return f'        <wd-cell title="{label}" :value="detail?.{field["java_field"]} ?? \'-\'" />'
+
+
+def render_uniapp_search_state(fields: list[dict[str, Any]]) -> str:
+    if not fields:
+        return "keyword: undefined as string | undefined,"
+    lines: list[str] = []
+    for field in fields[:3]:
+        lines.append(f"{field['java_field']}: undefined,")
+    return "\n".join(lines)
+
+
+def render_uniapp_search_reset(fields: list[dict[str, Any]]) -> str:
+    if not fields:
+        return "formData.keyword = undefined"
+    return "\n".join(f"formData.{field['java_field']} = undefined" for field in fields[:3])
+
+
+def render_uniapp_form_state(fields: list[dict[str, Any]]) -> str:
+    if not fields:
+        return "remark: ''"
+    return "\n".join(
+        f"{field['java_field']}: {render_uniapp_default_value(field)},"
+        for field in fields[:6]
     )
+
+
+def render_uniapp_form_rules(fields: list[dict[str, Any]]) -> str:
+    rules = [
+        f"{field['java_field']}: [{{ required: true, message: '{sanitize_column_comment(field['column_comment'])}不能为空' }}],"
+        for field in fields[:6]
+        if not field.get("nullable")
+    ]
+    return "\n".join(rules)
+
+
+def render_uniapp_default_value(field: dict[str, Any]) -> str:
+    if field["ts_type"] == "number":
+        return "0"
+    if field["ts_type"] == "boolean":
+        return "false"
+    return "''"
 
 
 def escape_java_string(value: str) -> str:

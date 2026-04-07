@@ -66,35 +66,42 @@ def error_response(
     }
 
 
-def _describe_menu_apply_skip(menu_mode: str, menu_plan: dict[str, Any]) -> str:
+def stop_response_from_schema(
+    table_schema: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    fallback_error_code: str = "table_schema_unresolved",
+) -> dict[str, Any]:
+    return error_response(
+        str(table_schema.get("stop_reason") or fallback_error_code),
+        str(table_schema.get("message") or "表结构解析失败"),
+        data,
+    )
+
+
+def _describe_menu_apply_skip(menu_plan: dict[str, Any]) -> str:
     if menu_plan.get("disabled"):
         return "菜单 SQL 已在配置中禁用，跳过写库"
-    if menu_mode == "migration_only":
-        return "菜单为 migration_only 模式，仅迁移文件、不写库"
     if menu_plan.get("all_menus_exist"):
         return "所有菜单已存在，跳过菜单写库"
     return "跳过菜单写库"
 
 
-def _describe_dict_apply_skip(dict_mode: str, dict_plan: dict[str, Any]) -> str:
+def _describe_dict_apply_skip(dict_plan: dict[str, Any]) -> str:
     if dict_plan.get("disabled"):
         return "字典 SQL 已在配置中禁用"
-    if dict_mode == "migration_only":
-        return "字典为 migration_only 模式，仅迁移文件、不写库"
     if not dict_plan.get("has_dicts"):
         return "未检测到需生成的字典数据"
     return "跳过字典写库"
 
 
 def _describe_sql_apply_skip(
-    menu_mode: str,
-    dict_mode: str,
     menu_plan: dict[str, Any],
     dict_plan: dict[str, Any],
 ) -> str:
     parts = [
-        _describe_menu_apply_skip(menu_mode, menu_plan),
-        _describe_dict_apply_skip(dict_mode, dict_plan),
+        _describe_menu_apply_skip(menu_plan),
+        _describe_dict_apply_skip(dict_plan),
     ]
     return "；".join(parts)
 
@@ -285,6 +292,8 @@ def inspect_codegen_context_tool(
     )
     context["workspace_root"] = str(root)
     context["resolved_from_config"] = resolution.model_dump()
+    if not context["table_schema"].get("resolved"):
+        return stop_response_from_schema(context["table_schema"], context)
     return success_response("代码生成上下文分析完成", context)
 
 
@@ -307,7 +316,7 @@ def inspect_table_schema_tool(
     result["workspace_root"] = str(root)
     if result["resolved"]:
         return success_response("表结构解析成功", result)
-    return error_response("table_schema_unresolved", result["message"], result)
+    return stop_response_from_schema(result, result)
 
 
 @mcp.tool
@@ -353,19 +362,22 @@ def generate_codegen_scaffold_tool(
     if field_overrides:
         _apply_field_overrides(context, field_overrides)
     _attach_generated_dict_types(context)
+    result: dict[str, Any] = {
+        "workspace_root": str(root),
+        "table_name": table_name,
+        "resolved_from_config": resolution.model_dump(),
+        "context": context,
+    }
+    table_schema = context.get("table_schema") or {}
+    if table_schema and not table_schema.get("resolved"):
+        return stop_response_from_schema(table_schema, result)
     generated_files = generate_scaffold_files(
         context,
         overwrite=overwrite,
         include_backend=include_backend,
         include_frontend=include_frontend,
     )
-    result: dict[str, Any] = {
-        "workspace_root": str(root),
-        "table_name": table_name,
-        "resolved_from_config": resolution.model_dump(),
-        "context": context,
-        "generated_files": [file.model_dump() for file in generated_files],
-    }
+    result["generated_files"] = [file.model_dump() for file in generated_files]
     if write_files:
         write_result = write_generated_files(root, config, generated_files)
         write_result["workspace_root"] = str(root)
@@ -443,13 +455,13 @@ def generate_codegen_sql_tool(
     parent_menu_id: int | None = None,
     write_files: bool = False,
     overwrite: bool = False,
-    apply_menu_to_database: bool = False,
 ) -> dict[str, Any]:
     """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件并执行菜单数据。
 
-    菜单/字典是否生成、是否允许写库由工作区配置 codegen.menu_sql_mode、codegen.dict_sql_mode 控制：
-    auto（默认）= 生成 SQL，write_files 写迁移；apply_menu_to_database 时可写库；
-    migration_only = 生成 SQL 并可写迁移文件，但永不写库；
+    菜单/字典是否生成由工作区配置 codegen.menu_sql_mode、codegen.dict_sql_mode 控制；
+    是否允许写库由 codegen.apply_to_database 控制：
+    auto（默认）= 生成 SQL，write_files 写迁移；
+    migration_only = 兼容值，同样生成 SQL 并可写迁移文件；
     disabled = 不生成对应 SQL（不写迁移中的该段）。
     """
     loaded = load_config_or_error(workspace_root)
@@ -469,6 +481,15 @@ def generate_codegen_sql_tool(
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
     )
+    result: dict[str, Any] = {
+        "workspace_root": str(root),
+        "table_name": table_name,
+        "resolved_from_config": resolution.model_dump(),
+        "context": context,
+    }
+    table_schema = context.get("table_schema") or {}
+    if table_schema and not table_schema.get("resolved"):
+        return stop_response_from_schema(table_schema, result)
     sql_bundle = build_codegen_sql_bundle(
         context,
         module_menu_name=module_menu_name,
@@ -476,13 +497,7 @@ def generate_codegen_sql_tool(
         menu_icon=menu_icon,
         module_menu_icon=module_menu_icon,
     )
-    result: dict[str, Any] = {
-        "workspace_root": str(root),
-        "table_name": table_name,
-        "resolved_from_config": resolution.model_dump(),
-        "context": context,
-        "sql_bundle": sql_bundle,
-    }
+    result["sql_bundle"] = sql_bundle
     if not sql_bundle.get("ok"):
         return error_response("generate_codegen_sql_failed", sql_bundle["message"], result)
 
@@ -491,34 +506,43 @@ def generate_codegen_sql_tool(
         write_result["workspace_root"] = str(root)
         result["write_result"] = write_result
 
-    if apply_menu_to_database:
-        codegen_sql = context.get("codegen_sql", {})
-        menu_mode = str(codegen_sql.get("menu_mode") or "auto")
-        dict_mode = str(codegen_sql.get("dict_mode") or "auto")
-        menu_plan = sql_bundle.get("menu_plan", {})
-        dict_plan = sql_bundle.get("dict_plan", {})
+    codegen_sql = context.get("codegen_sql", {})
+    menu_mode = str(codegen_sql.get("menu_mode") or "auto")
+    dict_mode = str(codegen_sql.get("dict_mode") or "auto")
+    apply_to_database = bool(codegen_sql.get("apply_to_database"))
+    menu_plan = sql_bundle.get("menu_plan", {})
+    dict_plan = sql_bundle.get("dict_plan", {})
 
-        apply_menu_allowed = menu_mode == "auto" and not menu_plan.get("disabled")
-        apply_dict_allowed = dict_mode == "auto" and not dict_plan.get("disabled")
+    menu_generates_sql = not menu_plan.get("disabled")
+    dict_generates_sql = not dict_plan.get("disabled")
+    menu_needs_db = (
+        apply_to_database
+        and menu_generates_sql
+        and not menu_plan.get("all_menus_exist", False)
+    )
+    dict_needs_db = (
+        apply_to_database
+        and dict_generates_sql
+        and bool(dict_plan.get("has_dicts"))
+        and not bool(dict_plan.get("all_complete", False))
+    )
 
-        menu_needs_db = apply_menu_allowed and not menu_plan.get("all_menus_exist", False)
-        dict_needs_db = (
-            apply_dict_allowed
-            and bool(dict_plan.get("has_dicts"))
-            and not bool(dict_plan.get("all_complete", False))
-        )
-
-        if not menu_needs_db and not dict_needs_db:
-            result["apply_result"] = {
-                "ok": True,
-                "skipped_reason": "no_database_apply_needed",
-                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-                "message": _describe_sql_apply_skip(
-                    menu_mode, dict_mode, menu_plan, dict_plan
-                ),
-            }
-            return success_response("无需向数据库写入菜单或字典", result)
-
+    if not apply_to_database:
+        result["apply_result"] = {
+            "ok": True,
+            "skipped_reason": "apply_disabled_by_config",
+            "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+            "message": "codegen.apply_to_database=false，跳过菜单与字典写库",
+        }
+    elif not menu_needs_db and not dict_needs_db:
+        result["apply_result"] = {
+            "ok": True,
+            "skipped_reason": "no_database_apply_needed",
+            "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+            "message": _describe_sql_apply_skip(menu_plan, dict_plan),
+        }
+        return success_response("无需向数据库写入菜单或字典", result)
+    else:
         database_result = resolve_database_config(root, config)
         result["database"] = database_result
         if not database_result.get("ok"):
@@ -538,7 +562,7 @@ def generate_codegen_sql_tool(
                 "ok": True,
                 "skipped_reason": "menu_skipped",
                 "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-                "message": _describe_menu_apply_skip(menu_mode, menu_plan),
+                "message": _describe_menu_apply_skip(menu_plan),
             }
 
         if dict_needs_db:
@@ -558,19 +582,16 @@ def generate_codegen_sql_tool(
                 "ok": True,
                 "skipped_reason": "dict_skipped",
                 "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-                "message": _describe_dict_apply_skip(dict_mode, dict_plan),
+                "message": _describe_dict_apply_skip(dict_plan),
             }
 
     write_failed = bool(write_files and not result.get("write_result", {}).get("ok", True))
     apply_succeeded = bool(
-        not apply_menu_to_database
-        or (
-            result.get("apply_result", {}).get("ok", True)
-            and result.get("dict_apply_result", {}).get("ok", True)
-        )
+        result.get("apply_result", {}).get("ok", True)
+        and result.get("dict_apply_result", {}).get("ok", True)
     )
     if write_failed:
-        if apply_menu_to_database and apply_succeeded:
+        if apply_to_database and apply_succeeded:
             return success_response(
                 "SQL 已生成并执行数据库写入，但部分文件写入失败",
                 result,

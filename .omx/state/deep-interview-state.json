@@ -1,0 +1,76 @@
+{
+  "active": false,
+  "mode": "deep-interview",
+  "current_phase": "completing",
+  "started_at": "2026-04-07T06:28:00Z",
+  "updated_at": "2026-04-07T05:52:26.136Z",
+  "completed_at": "2026-04-07T08:13:58Z",
+  "session_id": "",
+  "thread_id": "019d667f-8a26-7ae0-880b-e95c589d0798",
+  "turn_id": "019d667f-8a96-70c0-8f7d-bf989ea9b0a5",
+  "input_lock": {
+    "active": true,
+    "scope": "deep-interview-auto-approval",
+    "acquired_at": "2026-04-07T05:20:26.569Z",
+    "blocked_inputs": [
+      "yes",
+      "y",
+      "proceed",
+      "continue",
+      "ok",
+      "sure",
+      "go ahead",
+      "next i should"
+    ],
+    "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes."
+  },
+  "task_description": "Clarify new scope branch for menu/dict SQL default behavior and naming-rule changes after frontend alignment.",
+  "interview_id": "codegen-sql-naming-20260407T062800Z",
+  "profile": "standard",
+  "type": "brownfield",
+  "initial_idea": "继续改 菜单/字典 SQL 默认行为、命名规则",
+  "current_ambiguity": 0.05,
+  "threshold": 0.2,
+  "max_rounds": 12,
+  "challenge_modes_used": [
+    "contrarian"
+  ],
+  "current_stage": "intent-first",
+  "current_focus": "config-shape",
+  "context_snapshot_path": ".omx/context/codegen-gap-fixes-20260407T051911Z.md",
+  "known_facts": [
+    "menu_sql_mode/dict_sql_mode defaults are still auto",
+    "write-to-database currently depends on apply_menu_to_database plus mode=auto",
+    "backend business naming comes from derive_business_name",
+    "frontend path naming comes from build_frontend_business_path"
+  ],
+  "supersedes": "previous frontend-only scope for this branch",
+  "iteration": 5,
+  "last_turn_at": "2026-04-07T08:11:45.014Z",
+  "rounds": [
+    {
+      "round": 1,
+      "target": "decision-boundary",
+      "question": "这次重新放回范围的 SQL 默认行为和命名规则到底是什么",
+      "answer": "SQL 默认行为 = 默认生成菜单/字典迁移 SQL，是否执行到数据库由显式配置控制；命名规则 = 仍然以原 Java codegen 规则优先",
+      "ambiguity": 0.23
+    },
+    {
+      "round": 2,
+      "target": "scope",
+      "question": "这次只改代码逻辑，还是连测试/README一起同步",
+      "answer": "C，代码逻辑 + 测试 + README 一起同步",
+      "ambiguity": 0.16
+    },
+    {
+      "round": 3,
+      "target": "config-shape",
+      "question": "是否新增高优先级工作区配置控制数据库执行",
+      "answer": "B，新增配置项，配置优先度最高",
+      "ambiguity": 0.16
+    }
+  ],
+  "transcript_path": ".omx/interviews/codegen-sql-naming-20260407T081358Z.md",
+  "spec_path": ".omx/specs/deep-interview-codegen-sql-naming.md",
+  "final_scope": "新增一个总开关配置项控制菜单/字典 SQL 是否允许执行到数据库；默认仍生成迁移 SQL；移除 apply_menu_to_database 工具参数逻辑；命名规则继续以原 Java codegen 规则优先；同步代码、测试、README。"
+}

@@ -73,6 +73,7 @@ class RoutingConfig(BaseModel):
 class CodegenConfig(BaseModel):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     manual_rules: list[ManualRule] = Field(default_factory=list)
+    apply_to_database: bool = False
     menu_sql_mode: SqlAssetMode = "auto"
     dict_sql_mode: SqlAssetMode = "auto"
 
@@ -133,13 +134,16 @@ def default_config_template() -> str:
           # 3. MCP 读取成功后，可以回填到本配置文件中
 
         codegen:
+          # 是否允许将菜单/字典 SQL 实际执行到数据库。默认 false，仅生成迁移 SQL，不写库。
+          apply_to_database: false
+
           routing:
             mode: manual # auto | ask | manual
             # auto: MCP 自动分析目标位置，并告诉 AI 先生成代码，再调用 MCP 写入
             # ask: MCP 返回候选位置，由 AI 询问用户后再继续
             # manual: 按 manual_rules 规则解析，不让用户每次重复确认
 
-          # 菜单 SQL：auto 生成迁移且 apply 时可写库；migration_only 只写迁移不写库；disabled 不生成菜单 SQL
+          # 菜单 SQL：auto / migration_only 均生成迁移 SQL；disabled 不生成菜单 SQL
           menu_sql_mode: auto # auto | migration_only | disabled
           # 字典 SQL：同上
           dict_sql_mode: auto # auto | migration_only | disabled

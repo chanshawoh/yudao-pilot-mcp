@@ -138,6 +138,7 @@ def build_codegen_context(
         "entity_name": entity_name,
         "menu_name": menu_name or entity_name,
         "codegen_sql": {
+            "apply_to_database": config.codegen.apply_to_database,
             "menu_mode": config.codegen.menu_sql_mode,
             "dict_mode": config.codegen.dict_sql_mode,
         },
@@ -151,6 +152,7 @@ def build_codegen_context(
         "backend_codegen_defaults": backend_defaults,
         "frontend_targets": frontend_targets,
         "menu_context": menu_context,
+        "database": database_result,
         "table_schema": table_schema,
         "migration_plan": migration_plan,
         "generated_file_plan": generated_file_plan,
@@ -424,7 +426,10 @@ def build_codegen_notes(
     if menu_context.get("needs_ai_parent_menu"):
         notes.append("父菜单未能自动解析，AI 需要结合业务语义或用户输入决定上级菜单")
     if not table_schema.get("resolved"):
-        notes.append("未能自动解析表结构，当前只能生成保守骨架；如需字段级代码，请继续提供数据库或 SQL 信息")
+        if table_schema.get("should_stop"):
+            notes.append("当前表结构前置条件未满足，AI 应停止后续生成并先处理提示信息")
+        else:
+            notes.append("未能自动解析表结构，当前只能生成保守骨架；如需字段级代码，请继续提供数据库或 SQL 信息")
     return notes
 
 

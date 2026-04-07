@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from textwrap import dedent
 
 import yaml
 
@@ -21,6 +22,46 @@ from yudao_pilot.server import (
     _ensure_module_enabled,
 )
 from yudao_pilot.sql_codegen import merge_sql_snippet, resolve_h2_sql_plan
+
+
+def _rewrite_backend_path(workspace_root: Path, backend_path: Path) -> None:
+    config_path = workspace_root / ".yudao-pilot" / "config.yaml"
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_config["projects"]["backend"]["path"] = str(backend_path)
+    config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def _create_fake_backend(
+    root: Path,
+    *,
+    database_name: str = "demo",
+    migration_files: dict[str, str] | None = None,
+) -> Path:
+    backend_root = root / "fake-backend"
+    resources_root = backend_root / "src" / "main" / "resources"
+    resources_root.mkdir(parents=True, exist_ok=True)
+    (backend_root / "sql" / "mysql" / "migrations").mkdir(parents=True, exist_ok=True)
+    (resources_root / "application-local.yaml").write_text(
+        dedent(
+            f"""\
+            spring:
+              datasource:
+                url: jdbc:mysql://127.0.0.1:3306/{database_name}?useSSL=false
+                username: root
+                password: 123456
+            """
+        ),
+        encoding="utf-8",
+    )
+    for filename, content in (migration_files or {}).items():
+        (backend_root / "sql" / "mysql" / "migrations" / filename).write_text(
+            content,
+            encoding="utf-8",
+        )
+    return backend_root
 
 
 def test_resolve_database_config_from_backend_local(workspace_builder) -> None:
@@ -83,6 +124,166 @@ def test_inspect_codegen_context_contains_schema_and_plan(workspace_builder) -> 
     assert data.get("codegen_sql", {}).get("dict_mode") == "auto"
     assert all("yudao-module-member/src/" in path for path in data["generated_file_plan"]["backend"])
     assert all("yudao-module-member-server/" not in path for path in data["generated_file_plan"]["backend"])
+
+
+def test_inspect_codegen_context_tool_stops_when_database_connection_fails(
+    workspace_builder,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = workspace_builder()
+    backend_root = _create_fake_backend(tmp_path)
+    _rewrite_backend_path(workspace_root, backend_root)
+
+    monkeypatch.setattr(schema_module, "resolve_mysql_schema_dump", lambda repo_root: None)
+
+    def fail_connect(database_config, table_name):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(schema_module, "parse_table_schema_from_database", fail_connect)
+
+    result = inspect_codegen_context_tool("missing_table", str(workspace_root))
+
+    assert result["ok"] is False
+    assert result["error_code"] == "database_connection_required"
+    assert "请配置数据库连接" in result["message"]
+
+
+def test_generate_codegen_scaffold_tool_stops_when_table_and_migration_are_missing(
+    workspace_builder,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = workspace_builder()
+    backend_root = _create_fake_backend(tmp_path)
+    _rewrite_backend_path(workspace_root, backend_root)
+
+    monkeypatch.setattr(schema_module, "resolve_mysql_schema_dump", lambda repo_root: None)
+    monkeypatch.setattr(schema_module, "parse_table_schema_from_database", lambda *args, **kwargs: None)
+
+    result = generate_codegen_scaffold_tool("missing_table", str(workspace_root))
+
+    assert result["ok"] is False
+    assert result["error_code"] == "table_schema_missing"
+    assert "表不存在" in result["message"]
+    assert "迁移SQL" in result["message"]
+
+
+def test_inspect_table_schema_tool_applies_migration_sql_and_reports_execution(
+    workspace_builder,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    migration_filename = "2026_04_07_120000_create_missing_table.sql"
+    workspace_root = workspace_builder()
+    backend_root = _create_fake_backend(
+        tmp_path,
+        migration_files={
+            migration_filename: dedent(
+                """\
+                -- create missing table
+                CREATE TABLE `missing_table` (
+                  `id` bigint NOT NULL,
+                  PRIMARY KEY (`id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='缺失表';
+                """
+            ),
+        },
+    )
+    _rewrite_backend_path(workspace_root, backend_root)
+
+    monkeypatch.setattr(schema_module, "resolve_mysql_schema_dump", lambda repo_root: None)
+
+    parsed_results = [
+        None,
+        {
+            "resolved": True,
+            "table_name": "missing_table",
+            "table_comment": "缺失表",
+            "sql_dump_path": None,
+            "schema_source": "database",
+            "database_name": "demo",
+            "message": "已从真实数据库解析表字段",
+            "columns": [
+                {
+                    "column_name": "id",
+                    "column_comment": "编号",
+                    "sql_type": "bigint",
+                    "raw_type": "bigint",
+                    "java_field": "id",
+                    "java_type": "Long",
+                    "ts_type": "number",
+                    "html_type": "input",
+                    "nullable": False,
+                    "primary_key": True,
+                    "auto_increment": False,
+                    "is_base_column": False,
+                    "in_do": True,
+                    "in_save": False,
+                    "in_resp": True,
+                    "in_list": True,
+                    "in_query": True,
+                }
+            ],
+        },
+    ]
+
+    def fake_parse_from_database(database_config, table_name):
+        return parsed_results.pop(0)
+
+    monkeypatch.setattr(schema_module, "parse_table_schema_from_database", fake_parse_from_database)
+
+    executed_sql: list[str] = []
+
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            executed_sql.append(" ".join(sql.split()))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.committed = False
+            self.rolled_back = False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            pass
+
+    fake_connection = FakeConnection()
+
+    class FakePyMySQL:
+        class cursors:
+            DictCursor = object
+
+        @staticmethod
+        def connect(**kwargs):
+            return fake_connection
+
+    monkeypatch.setitem(sys.modules, "pymysql", FakePyMySQL)
+
+    result = inspect_table_schema_tool("missing_table", str(workspace_root))
+
+    assert result["ok"] is True
+    assert fake_connection.committed is True
+    assert fake_connection.rolled_back is False
+    assert any("CREATE TABLE `missing_table`" in sql for sql in executed_sql)
+    assert result["data"]["executed_migration_sqls"] == [
+        str(backend_root / "sql" / "mysql" / "migrations" / migration_filename)
+    ]
+    assert migration_filename in result["data"]["message"]
 
 
 def test_infer_merchant_user_from_manual_rules(workspace_builder) -> None:
@@ -275,7 +476,7 @@ def test_generate_codegen_scaffold_uses_simple_class_name_for_vue3_form_import(
     )
 
     assert "import BrandForm from './BrandForm.vue'" in index_vue["content"]
-    assert "<BrandForm ref=\"formRef\" />" in index_vue["content"]
+    assert "<BrandForm ref=\"formRef\" @success=\"getList\" />" in index_vue["content"]
     assert "import HotelBrandForm from './BrandForm.vue'" not in index_vue["content"]
 
 
@@ -306,6 +507,78 @@ def test_generate_codegen_scaffold_uses_business_name_for_controller_route(
 
     assert '@RequestMapping("/hotel/brand")' in controller_java["content"]
     assert '@RequestMapping("/hotel/hotel-brand")' not in controller_java["content"]
+
+
+def test_generate_codegen_scaffold_adds_controller_permissions_and_swagger_annotations(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: system
+  table_prefixes:
+    - system
+  table_rules:
+    - table: system_tourism_location
+      business: tourism_location
+      entity: SystemTourismLocation
+""".strip(),
+    )
+    fake_schema = {
+        "resolved": True,
+        "table_name": "system_tourism_location",
+        "table_comment": "景点位置",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            }
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_scaffold_tool("system_tourism_location", str(workspace_root))
+
+    assert result["ok"] is True
+    controller_java = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith(
+            "controller/admin/tourism_location/SystemTourismLocationController.java"
+        )
+    )
+
+    assert '@Tag(name = "管理后台 - 景点位置")' in controller_java["content"]
+    assert "@Operation(summary = \"新增景点位置\")" in controller_java["content"]
+    assert "@Operation(summary = \"修改景点位置\")" in controller_java["content"]
+    assert "@Operation(summary = \"删除景点位置\")" in controller_java["content"]
+    assert "@Operation(summary = \"获得景点位置详情\")" in controller_java["content"]
+    assert "@Operation(summary = \"获得景点位置分页\")" in controller_java["content"]
+    assert '@Parameter(name = "id", description = "编号", required = true, example = "1024")' in controller_java["content"]
+    assert "@PreAuthorize(\"@ss.hasPermission('system:tourism-location:create')\")" in controller_java["content"]
+    assert "@PreAuthorize(\"@ss.hasPermission('system:tourism-location:update')\")" in controller_java["content"]
+    assert "@PreAuthorize(\"@ss.hasPermission('system:tourism-location:delete')\")" in controller_java["content"]
+    assert controller_java["content"].count(
+        "@PreAuthorize(\"@ss.hasPermission('system:tourism-location:query')\")"
+    ) == 2
 
 
 def test_generate_codegen_scaffold_uses_business_name_for_frontend_api_route(
@@ -344,6 +617,446 @@ def test_generate_codegen_scaffold_uses_business_name_for_frontend_api_route(
     assert "/admin-api/hotel/hotel-brand/page" not in vue3_api["content"]
     assert "/hotel/brand/page" in vben_api["content"]
     assert "/hotel/hotel-brand/page" not in vben_api["content"]
+
+
+def test_generate_codegen_scaffold_normalizes_vue3_api_file_indentation(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: system
+  table_prefixes:
+    - system
+  table_rules:
+    - table: system_tourism_location
+      business: tourism_location
+      entity: SystemTourismLocation
+""".strip(),
+    )
+    fake_schema = {
+        "resolved": True,
+        "table_name": "system_tourism_location",
+        "table_comment": "景点位置",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            }
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_scaffold_tool("system_tourism_location", str(workspace_root))
+
+    assert result["ok"] is True
+    vue3_api = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/api/system/tourism_location/index.ts")
+        and item["target_type"] == "VUE3_ELEMENT_PLUS"
+    )
+
+    first_line = vue3_api["content"].splitlines()[0]
+    assert first_line == "import request from '@/config/axios'"
+    assert not first_line.startswith(" ")
+    assert "\n        export const" not in vue3_api["content"]
+
+
+def test_generate_codegen_scaffold_vue3_api_includes_export_method(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    vue3_api = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/api/hotel/brand/index.ts")
+        and item["target_type"] == "VUE3_ELEMENT_PLUS"
+    )
+
+    assert "export const exportHotelBrand = async (params: any) => {" in vue3_api["content"]
+    assert "request.download({ url: '/admin-api/hotel/brand/export-excel', params })" in vue3_api["content"]
+
+
+def test_generate_codegen_scaffold_vue3_index_replaces_todo_with_upstream_style_flows(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    index_vue = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/views/hotel/brand/index.vue")
+    )
+
+    assert "TODO Yudao Pilot" not in index_vue["content"]
+    assert "const queryParams = reactive({" in index_vue["content"]
+    assert "const getList = async () => {" in index_vue["content"]
+    assert "const handleQuery = () => {" in index_vue["content"]
+    assert "const resetQuery = () => {" in index_vue["content"]
+    assert "const handleDelete = async (id: number) => {" in index_vue["content"]
+    assert "const handleExport = async () => {" in index_vue["content"]
+    assert "await exportHotelBrand(queryParams)" in index_vue["content"]
+    assert "v-hasPermi=\"['hotel:brand:export']\"" in index_vue["content"]
+
+
+def test_generate_codegen_scaffold_vue3_form_replaces_todo_with_upstream_style_submit_flow(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    form_vue = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/views/hotel/brand/BrandForm.vue")
+    )
+
+    assert "TODO Yudao Pilot" not in form_vue["content"]
+    assert "import { createHotelBrand, getHotelBrand, updateHotelBrand } from '@/api/hotel/brand'" in form_vue["content"]
+    assert "const formLoading = ref(false)" in form_vue["content"]
+    assert "const formType = ref('')" in form_vue["content"]
+    assert "const resetForm = () => {" in form_vue["content"]
+    assert "const open = async (type: string, id?: number) => {" in form_vue["content"]
+    assert "formData.value = await getHotelBrand(id)" in form_vue["content"]
+    assert "const submitForm = async () => {" in form_vue["content"]
+    assert "if (formType.value === 'create') {" in form_vue["content"]
+    assert "await createHotelBrand(data)" in form_vue["content"]
+    assert "await updateHotelBrand(data)" in form_vue["content"]
+
+
+def test_generate_codegen_scaffold_vue3_renders_common_field_types_with_upstream_controls(
+    workspace_builder,
+    monkeypatch,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+    fake_schema = {
+        "resolved": True,
+        "table_name": "hotel_brand",
+        "table_comment": "酒店品牌",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+            {
+                "column_name": "status",
+                "column_comment": "状态: 0-启用, 1-禁用",
+                "sql_type": "tinyint",
+                "raw_type": "tinyint",
+                "java_field": "status",
+                "java_type": "Integer",
+                "ts_type": "number",
+                "html_type": "radio",
+                "nullable": False,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+            {
+                "column_name": "sort",
+                "column_comment": "排序",
+                "sql_type": "int",
+                "raw_type": "int",
+                "java_field": "sort",
+                "java_type": "Integer",
+                "ts_type": "number",
+                "html_type": "inputNumber",
+                "nullable": False,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": False,
+            },
+            {
+                "column_name": "cover_url",
+                "column_comment": "封面图",
+                "sql_type": "varchar",
+                "raw_type": "varchar(255)",
+                "java_field": "coverUrl",
+                "java_type": "String",
+                "ts_type": "string",
+                "html_type": "imageUpload",
+                "nullable": True,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": False,
+            },
+            {
+                "column_name": "content",
+                "column_comment": "介绍",
+                "sql_type": "text",
+                "raw_type": "text",
+                "java_field": "content",
+                "java_type": "String",
+                "ts_type": "string",
+                "html_type": "editor",
+                "nullable": True,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": False,
+                "in_query": False,
+            },
+            {
+                "column_name": "create_time",
+                "column_comment": "创建时间",
+                "sql_type": "datetime",
+                "raw_type": "datetime",
+                "java_field": "createTime",
+                "java_type": "LocalDateTime",
+                "ts_type": "string",
+                "html_type": "datetime",
+                "nullable": True,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": True,
+                "in_do": False,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    index_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/views/hotel/brand/index.vue")
+    )
+    form_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("src/views/hotel/brand/BrandForm.vue")
+    )
+
+    assert "from '@/utils/dict'" in index_vue
+    assert "getIntDictOptions" in index_vue
+    assert "DICT_TYPE" in index_vue
+    assert "v-for=\"dict in getIntDictOptions(DICT_TYPE.COMMON_STATUS)\"" in index_vue
+    assert "<dict-tag :type=\"DICT_TYPE.COMMON_STATUS\" :value=\"scope.row.status\" />" in index_vue
+    assert ":formatter=\"dateFormatter\"" in index_vue
+    assert "<el-radio-group v-model=\"formData.status\">" in form_vue
+    assert "v-for=\"dict in getIntDictOptions(DICT_TYPE.COMMON_STATUS)\"" in form_vue
+    assert "<el-input-number" in form_vue
+    assert "<UploadImg v-model=\"formData.coverUrl\" />" in form_vue
+    assert "<Editor v-model=\"formData.content\" height=\"150px\" />" in form_vue
+
+
+def test_generate_codegen_scaffold_vben_includes_export_contract_and_toolbar_action(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_VBEN5_ANTD_SCHEMA",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    api_ts = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
+        and item["relative_path"].endswith("apps/web-antd/src/api/hotel/brand/index.ts")
+    )
+    index_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
+        and item["relative_path"].endswith("apps/web-antd/src/views/hotel/brand/index.vue")
+    )
+
+    assert "export function exportHotelBrand(params" in api_ts
+    assert "requestClient.download('/hotel/brand/export-excel'" in api_ts
+    assert "import { deleteHotelBrand, exportHotelBrand, getHotelBrandPage }" in index_vue
+    assert "auth: ['hotel:brand:export']" in index_vue
+
+
+def test_generate_codegen_scaffold_uniapp_replaces_placeholder_pages_with_data_flows(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ADMIN_UNIAPP_WOT",),
+        manual_rules_yaml="""
+- module: hotel
+  table_prefixes:
+    - hotel
+  table_rules:
+    - table: hotel_brand
+      business: brand
+      entity: HotelBrand
+""".strip(),
+    )
+
+    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
+
+    assert result["ok"] is True
+    api_ts = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
+        and item["relative_path"].endswith("src/api/hotel/brand/index.ts")
+    )
+    index_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
+        and item["relative_path"].endswith("src/pages-hotel/brand/index.vue")
+    )
+    search_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
+        and item["relative_path"].endswith("src/pages-hotel/brand/components/search-form.vue")
+    )
+    form_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
+        and item["relative_path"].endswith("src/pages-hotel/brand/form/index.vue")
+    )
+    detail_vue = next(
+        item["content"]
+        for item in result["data"]["generated_files"]
+        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
+        and item["relative_path"].endswith("src/pages-hotel/brand/detail/index.vue")
+    )
+
+    assert "export function exportHotelBrand" in api_ts
+    assert "http.download" in api_ts
+    assert "SearchForm @search=\"handleQuery\" @reset=\"handleReset\"" in index_vue
+    assert "const loadMoreState = ref<LoadMoreState>('loading')" in index_vue
+    assert "async function getList()" in index_vue
+    assert "function handleAdd()" in index_vue
+    assert "function handleDetail(item: HotelBrand)" in index_vue
+    assert "wd-search" in search_vue
+    assert "emit('search'" in search_vue
+    assert "emit('reset')" in search_vue
+    assert "async function handleSubmit()" in form_vue
+    assert "await createHotelBrand" in form_vue
+    assert "await updateHotelBrand" in form_vue
+    assert "detail.value = await getHotelBrand(props.id)" in detail_vue
+    assert "const detail = ref<HotelBrand | null>(null)" in detail_vue
 
 
 def test_generate_vben_schema_refines_field_rendering_rules(
@@ -955,6 +1668,130 @@ def test_generate_codegen_sql_tool_menu_sql_mode_disabled(workspace_builder, mon
     assert sql_bundle["codegen_sql_modes"]["menu"] == "disabled"
 
 
+def test_generate_codegen_sql_tool_defaults_to_skip_database_apply_by_config(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    fake_schema = {
+        "resolved": True,
+        "table_name": "member_user",
+        "table_comment": "会员用户",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    apply_calls: list[dict[str, object]] = []
+
+    def fake_apply_menu(database_config, menu_plan):
+        apply_calls.append({"database": database_config, "menu_plan": menu_plan})
+        return {"ok": True, "created": [], "updated": [], "skipped": []}
+
+    monkeypatch.setattr("yudao_pilot.server.apply_menu_plan_to_database", fake_apply_menu)
+
+    result = generate_codegen_sql_tool("member_user", str(workspace_root))
+
+    assert result["ok"] is True
+    assert result["data"]["context"]["codegen_sql"]["apply_to_database"] is False
+    assert result["data"]["apply_result"]["skipped_reason"] == "apply_disabled_by_config"
+    assert len(apply_calls) == 0
+
+
+def test_generate_codegen_sql_tool_applies_when_config_enabled_even_in_migration_only_mode(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    config_path = workspace_root / ".yudao-pilot" / "config.yaml"
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_config["codegen"]["apply_to_database"] = True
+    raw_config["codegen"]["menu_sql_mode"] = "migration_only"
+    config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "member_user",
+        "table_comment": "会员用户",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr(
+        "yudao_pilot.server.resolve_database_config",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "database": {
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+                "username": "root",
+                "password": "123456",
+            },
+            "message": "ok",
+        },
+    )
+
+    apply_calls: list[dict[str, object]] = []
+
+    def fake_apply_menu(database_config, menu_plan):
+        apply_calls.append({"database": database_config, "menu_plan": menu_plan})
+        return {"ok": True, "created": [], "updated": [], "skipped": []}
+
+    monkeypatch.setattr("yudao_pilot.server.apply_menu_plan_to_database", fake_apply_menu)
+
+    result = generate_codegen_sql_tool("member_user", str(workspace_root))
+
+    assert result["ok"] is True
+    assert result["data"]["context"]["codegen_sql"]["apply_to_database"] is True
+    assert len(apply_calls) == 1
+
+
 def test_generate_codegen_sql_tool_creates_root_menu_when_missing(
     workspace_builder, monkeypatch
 ) -> None:
@@ -1126,6 +1963,13 @@ def test_generate_codegen_sql_tool_continues_database_apply_when_file_write_fail
     workspace_builder, monkeypatch
 ) -> None:
     workspace_root = workspace_builder()
+    config_path = workspace_root / ".yudao-pilot" / "config.yaml"
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_config["codegen"]["apply_to_database"] = True
+    config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
     apply_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
@@ -1145,7 +1989,7 @@ def test_generate_codegen_sql_tool_continues_database_apply_when_file_write_fail
             "entity_name": "HotelBrand",
             "table_name": "hotel_brand",
             "backend_project": {"repo_root": "/tmp/fake-backend"},
-            "codegen_sql": {"menu_mode": "auto", "dict_mode": "auto"},
+            "codegen_sql": {"apply_to_database": True, "menu_mode": "auto", "dict_mode": "auto"},
         },
     )
     monkeypatch.setattr(
@@ -1219,7 +2063,6 @@ def test_generate_codegen_sql_tool_continues_database_apply_when_file_write_fail
         "hotel_brand",
         str(workspace_root),
         write_files=True,
-        apply_menu_to_database=True,
     )
 
     assert result["ok"] is True
@@ -1467,7 +2310,7 @@ def test_scan_backend_table_entities_finds_do_files(repo_root: Path) -> None:
     assert "hotel_brand" in table_names
     hotel_brand = next(e for e in entities if e.table_name == "hotel_brand")
     assert hotel_brand.module_name == "hotel"
-    assert hotel_brand.business_dir == "hotel_brand"
+    assert hotel_brand.business_dir == "brand"
 
 
 def test_scan_backend_table_entities_empty_on_missing_dir(tmp_path: Path) -> None:
