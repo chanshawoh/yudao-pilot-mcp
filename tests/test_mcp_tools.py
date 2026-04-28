@@ -21,6 +21,7 @@ from yudao_pilot.server import (
     _create_module_scaffold,
     _ensure_module_enabled,
 )
+from yudao_pilot.codegen import resolve_backend_codegen_target, build_generated_file_plan
 from yudao_pilot.sql_codegen import merge_sql_snippet, resolve_h2_sql_plan
 
 
@@ -2537,3 +2538,89 @@ def test_infer_resolution_new_module_creates_scaffold_when_requested(workspace_b
     assert r.module == "logistics"
     assert (backend_root / "yudao-module-logistics" / "pom.xml").exists()
     assert "<module>yudao-module-logistics</module>" in (backend_root / "pom.xml").read_text()
+
+
+def _write_pom(path: Path, artifact_id: str, *, packaging: str = "jar", modules: list[str] | None = None) -> None:
+    modules_xml = ""
+    if modules:
+        modules_xml = "<modules>\n" + "\n".join(f"    <module>{module}</module>" for module in modules) + "\n  </modules>"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""<project>
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>{artifact_id}</artifactId>
+  <packaging>{packaging}</packaging>
+  {modules_xml}
+</project>
+""",
+        encoding="utf-8",
+    )
+
+
+def test_backend_codegen_target_uses_child_jar_for_aggregator_module(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    _write_pom(
+        backend_root / "yudao-module-travel" / "pom.xml",
+        "yudao-module-travel",
+        packaging="pom",
+        modules=[
+            "yudao-module-hotel-product",
+            "yudao-module-hotel-trade",
+            "yudao-module-hotel-trade-api",
+            "yudao-module-car-rental-biz",
+        ],
+    )
+    _write_pom(backend_root / "yudao-module-travel" / "yudao-module-hotel-product" / "pom.xml", "yudao-module-hotel-product")
+    _write_pom(backend_root / "yudao-module-travel" / "yudao-module-hotel-trade" / "pom.xml", "yudao-module-hotel-trade")
+    _write_pom(backend_root / "yudao-module-travel" / "yudao-module-hotel-trade-api" / "pom.xml", "yudao-module-hotel-trade-api")
+    _write_pom(backend_root / "yudao-module-travel" / "yudao-module-car-rental-biz" / "pom.xml", "yudao-module-car-rental-biz")
+    (
+        backend_root
+        / "yudao-module-travel/yudao-module-hotel-product/src/main/java/cn/iocoder/yudao/module/product/dal/dataobject/brand"
+    ).mkdir(parents=True)
+    (
+        backend_root
+        / "yudao-module-travel/yudao-module-car-rental-biz/src/main/java/cn/iocoder/yudao/module/rental/dal/dataobject/order"
+    ).mkdir(parents=True)
+
+    hotel_target = resolve_backend_codegen_target(
+        backend_root,
+        module_name="travel",
+        business_name="hotel/brand",
+        table_name="hotel_brand",
+        entity_name="HotelBrand",
+    )
+    rental_target = resolve_backend_codegen_target(
+        backend_root,
+        module_name="travel",
+        business_name="car/order",
+        table_name="car_rental_order",
+        entity_name="CarRentalOrder",
+    )
+
+    assert hotel_target["module_dir_name"] == "yudao-module-travel/yudao-module-hotel-product"
+    assert hotel_target["package_module_name"] == "product"
+    assert hotel_target["matched_by"] == "aggregator_child"
+    assert rental_target["module_dir_name"] == "yudao-module-travel/yudao-module-car-rental-biz"
+    assert rental_target["package_module_name"] == "rental"
+
+
+def test_generated_backend_plan_uses_resolved_module_dir_and_package(tmp_path: Path) -> None:
+    target = {
+        "module_dir_name": "yudao-module-travel/yudao-module-hotel-product",
+        "package_module_name": "product",
+    }
+
+    plan = build_generated_file_plan(
+        table_name="hotel_brand",
+        module_name="product",
+        business_name="brand",
+        entity_name="HotelBrand",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[],
+        unit_test_enable=False,
+        backend_target=target,
+    )
+
+    assert "yudao-module-travel/yudao-module-hotel-product/src/main/java/cn/iocoder/yudao/module/product/controller/admin/brand/vo/HotelBrandPageReqVO.java" in plan["backend"]
+    assert "yudao-module-travel/src/main/java" not in "\n".join(plan["backend"])

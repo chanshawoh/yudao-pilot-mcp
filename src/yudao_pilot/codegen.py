@@ -10,6 +10,7 @@ import yaml
 from .config import WorkspaceConfig
 from .database import extract_database_from_spring_config, resolve_database_config
 from .inspector import (
+    parse_pom,
     resolve_backend_repo_root,
     resolve_backend_server_root,
     resolve_project_path,
@@ -39,6 +40,156 @@ CODEGEN_VO_TYPE_LABELS: dict[int, str] = {
     10: "VO",
     20: "DO",
 }
+
+
+def resolve_backend_codegen_target(
+    backend_repo_root: Path,
+    *,
+    module_name: str,
+    business_name: str,
+    table_name: str,
+    entity_name: str,
+) -> dict[str, Any]:
+    module_dir_name = f"yudao-module-{module_name}"
+    module_dir = backend_repo_root / module_dir_name
+    target = {
+        "module_dir_name": module_dir_name,
+        "package_module_name": module_name,
+        "matched_by": "default",
+    }
+    pom_path = module_dir / "pom.xml"
+    if not pom_path.exists():
+        return target
+
+    try:
+        pom_facts = parse_pom(pom_path)
+    except Exception:
+        return target
+    if pom_facts.packaging != "pom":
+        return target
+
+    keywords = candidate_keywords(module_name, business_name, table_name, entity_name)
+    child_candidates: list[tuple[int, str, str]] = []
+    for child_module in pom_facts.modules:
+        child_dir = module_dir / child_module
+        child_pom = child_dir / "pom.xml"
+        if not child_pom.exists():
+            continue
+        try:
+            child_facts = parse_pom(child_pom)
+        except Exception:
+            continue
+        if child_facts.packaging != "jar":
+            continue
+        package_module_name = infer_package_module_name(child_dir, child_module)
+        score = score_backend_child_module(child_module, package_module_name, child_dir, keywords)
+        if score <= 0:
+            continue
+        child_candidates.append((score, child_module, package_module_name))
+
+    if not child_candidates:
+        return {
+            "module_dir_name": f"{module_dir_name}/yudao-module-{module_name}-biz",
+            "package_module_name": module_name,
+            "matched_by": "aggregator_new_child",
+            "aggregator_module_dir_name": module_dir_name,
+        }
+
+    best_score, child_module, package_module_name = sorted(
+        child_candidates,
+        key=lambda item: (-item[0], len(item[1])),
+    )[0]
+    return {
+        "module_dir_name": f"{module_dir_name}/{child_module}",
+        "package_module_name": package_module_name,
+        "matched_by": "aggregator_child",
+        "score": best_score,
+        "aggregator_module_dir_name": module_dir_name,
+    }
+
+
+def candidate_keywords(
+    module_name: str,
+    business_name: str,
+    table_name: str,
+    entity_name: str,
+) -> set[str]:
+    raw_parts = {
+        module_name,
+        business_name,
+        table_name,
+        normalize_snake_case(entity_name),
+        business_name.replace("/", "_"),
+    }
+    keywords: set[str] = set()
+    for value in raw_parts:
+        normalized = normalize_snake_case(value).replace("/", "_")
+        for part in normalized.split("_"):
+            part = part.strip("-_")
+            if len(part) >= 3:
+                keywords.add(part)
+    return keywords
+
+
+def score_backend_child_module(
+    child_module: str,
+    package_module_name: str,
+    child_dir: Path,
+    keywords: set[str],
+) -> int:
+    normalized = normalize_snake_case(child_module.replace("yudao-module-", ""))
+    module_parts = {part for part in normalized.split("_") if part}
+    package_parts = {part for part in normalize_snake_case(package_module_name).split("_") if part}
+    business_dirs = collect_backend_business_dirs(child_dir, package_module_name)
+    score = 0
+    for keyword in keywords:
+        if keyword in module_parts:
+            score += 3
+        elif keyword in normalized:
+            score += 1
+        if keyword in package_parts:
+            score += 2
+        if keyword in business_dirs:
+            score += 4
+    if normalized.endswith("api"):
+        score -= 2
+    if normalized.endswith("biz"):
+        score += 1
+    return score
+
+
+def collect_backend_business_dirs(child_dir: Path, package_module_name: str) -> set[str]:
+    dataobject_root = (
+        child_dir
+        / "src"
+        / "main"
+        / "java"
+        / "cn"
+        / "iocoder"
+        / "yudao"
+        / "module"
+        / package_module_name
+        / "dal"
+        / "dataobject"
+    )
+    if not dataobject_root.is_dir():
+        return set()
+    return {
+        normalize_snake_case(path.name)
+        for path in dataobject_root.iterdir()
+        if path.is_dir()
+    }
+
+
+def infer_package_module_name(child_dir: Path, child_module: str) -> str:
+    base = child_dir / "src" / "main" / "java" / "cn" / "iocoder" / "yudao" / "module"
+    if base.is_dir():
+        subdirs = sorted(path for path in base.iterdir() if path.is_dir())
+        if len(subdirs) == 1:
+            return subdirs[0].name
+    normalized = normalize_snake_case(child_module.replace("yudao-module-", ""))
+    parts = [part for part in normalized.split("_") if part not in {"api", "biz"}]
+    return parts[-1] if parts else normalized
 
 
 def compare_codegen_reference_projects(reference_root: Path) -> dict[str, Any]:
@@ -104,9 +255,17 @@ def build_codegen_context(
         backend_server_root, config.projects.backend.config_profile
     )
     frontend_targets = resolve_frontend_codegen_targets(root, config)
-    menu_context = resolve_menu_context(
+    backend_target = resolve_backend_codegen_target(
         backend_repo_root,
         module_name=module_name,
+        business_name=business_name,
+        table_name=table_name,
+        entity_name=entity_name,
+    )
+    effective_module_name = str(backend_target.get("package_module_name") or module_name)
+    menu_context = resolve_menu_context(
+        backend_repo_root,
+        module_name=effective_module_name,
         menu_name=menu_name or entity_name,
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
@@ -123,17 +282,19 @@ def build_codegen_context(
     )
     generated_file_plan = build_generated_file_plan(
         table_name=table_name,
-        module_name=module_name,
+        module_name=effective_module_name,
         business_name=business_name,
         entity_name=entity_name,
         base_package=str(backend_defaults.get("base_package") or "cn.iocoder.yudao"),
         frontend_targets=frontend_targets,
         unit_test_enable=bool(backend_defaults.get("unit_test_enable")),
+        backend_target=backend_target,
     )
 
     return {
         "table_name": table_name,
-        "module_name": module_name,
+        "module_name": effective_module_name,
+        "configured_module_name": module_name,
         "business_name": business_name,
         "entity_name": entity_name,
         "menu_name": menu_name or entity_name,
@@ -148,6 +309,7 @@ def build_codegen_context(
             "path": str(configured_backend_root),
             "repo_root": str(backend_repo_root),
             "server_root": str(backend_server_root),
+            "codegen_target": backend_target,
         },
         "backend_codegen_defaults": backend_defaults,
         "frontend_targets": frontend_targets,
@@ -639,6 +801,7 @@ def build_generated_file_plan(
     base_package: str,
     frontend_targets: list[dict[str, Any]],
     unit_test_enable: bool,
+    backend_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     simple_class_name = build_simple_class_name(module_name, entity_name)
     frontend_business_path = build_frontend_business_path(
@@ -651,6 +814,8 @@ def build_generated_file_plan(
         entity_name=entity_name,
         base_package=base_package,
         unit_test_enable=unit_test_enable,
+        module_dir_name=str((backend_target or {}).get("module_dir_name") or f"yudao-module-{module_name}"),
+        package_module_name=str((backend_target or {}).get("package_module_name") or module_name),
     )
     frontend_files = [
         {
@@ -673,6 +838,11 @@ def build_generated_file_plan(
         "frontends": frontend_files,
         "frontend_business_path": frontend_business_path,
         "simple_class_name": simple_class_name,
+        "backend_target": backend_target or {
+            "module_dir_name": f"yudao-module-{module_name}",
+            "package_module_name": module_name,
+            "matched_by": "default",
+        },
     }
 
 
@@ -683,60 +853,73 @@ def build_backend_file_plan(
     entity_name: str,
     base_package: str,
     unit_test_enable: bool,
+    module_dir_name: str | None = None,
+    package_module_name: str | None = None,
 ) -> list[str]:
     package_dir = base_package.replace(".", "/").strip("/")
+    module_dir = module_dir_name or f"yudao-module-{module_name}"
+    package_module = package_module_name or module_name
     backend_files = [
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"controller/admin/{business_name}/vo/{entity_name}PageReqVO.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"controller/admin/{business_name}/vo/{entity_name}RespVO.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"controller/admin/{business_name}/vo/{entity_name}SaveReqVO.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"controller/admin/{business_name}/{entity_name}Controller.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"dal/dataobject/{business_name}/{entity_name}DO.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"dal/mysql/{business_name}/{entity_name}Mapper.java",
         ),
-        f"yudao-module-{module_name}/src/main/resources/mapper/{business_name}/{entity_name}Mapper.xml",
+        f"{module_dir}/src/main/resources/mapper/{business_name}/{entity_name}Mapper.xml",
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"service/{business_name}/{entity_name}Service.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             f"service/{business_name}/{entity_name}ServiceImpl.java",
         ),
         build_backend_java_path(
-            module_name,
+            module_dir,
+            package_module,
             "main",
             package_dir,
             "enums/ErrorCodeConstants_手动操作.java",
@@ -745,7 +928,8 @@ def build_backend_file_plan(
     if unit_test_enable:
         backend_files.append(
             build_backend_java_path(
-                module_name,
+                module_dir,
+                package_module,
                 "test",
                 package_dir,
                 f"service/{business_name}/{entity_name}ServiceImplTest.java",
@@ -820,14 +1004,15 @@ def resolve_vben_frontend_root(front_type: int) -> str:
 
 
 def build_backend_java_path(
-    module_name: str,
+    module_dir_name: str,
+    package_module_name: str,
     src_type: str,
     package_dir: str,
     suffix: str,
 ) -> str:
     return (
-        f"yudao-module-{module_name}/"
-        f"src/{src_type}/java/{package_dir}/module/{module_name}/{suffix}"
+        f"{module_dir_name}/"
+        f"src/{src_type}/java/{package_dir}/module/{package_module_name}/{suffix}"
     )
 
 

@@ -72,7 +72,11 @@ def build_codegen_sql_bundle(
     dict_mode: str = str(codegen_sql.get("dict_mode") or "auto")
 
     backend_repo_root = resolve_backend_repo_root(Path(context["backend_project"]["repo_root"]))
-    h2_plan = resolve_h2_sql_plan(backend_repo_root, context["module_name"])
+    h2_plan = resolve_h2_sql_plan(
+        backend_repo_root,
+        context["module_name"],
+        module_dir_name=(context.get("backend_project") or {}).get("codegen_target", {}).get("module_dir_name"),
+    )
 
     if menu_mode == "disabled":
         menu_plan = _disabled_menu_plan_stub(context)
@@ -190,8 +194,12 @@ def write_codegen_sql_bundle(
     }
 
 
-def resolve_h2_sql_plan(backend_repo_root: Path, module_name: str) -> dict[str, Any]:
-    module_dir_name = f"yudao-module-{module_name}"
+def resolve_h2_sql_plan(
+    backend_repo_root: Path,
+    module_name: str,
+    module_dir_name: str | None = None,
+) -> dict[str, Any]:
+    module_dir_name = module_dir_name or f"yudao-module-{module_name}"
     create_candidates = sorted(
         backend_repo_root.glob(f"**/{module_dir_name}/src/test/resources/sql/create_tables.sql")
     )
