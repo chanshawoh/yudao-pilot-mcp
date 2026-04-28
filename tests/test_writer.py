@@ -57,6 +57,104 @@ def test_backend_writer_skips_when_module_does_not_exist(repo_root: Path, tmp_pa
     assert result["results"][0]["reason"] == "目标后端模块不存在，拒绝创建新的模块结构"
 
 
+def test_backend_writer_rejects_paths_that_escape_module(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    module_root = repo_root / "yudao-module-member"
+    module_root.mkdir(parents=True)
+    root_pom = repo_root / "pom.xml"
+    root_pom.write_text("original", encoding="utf-8")
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {
+                    "path": str(repo_root),
+                    "type": "ruoyi-vue-pro-jdk17",
+                },
+                "frontend": [],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="backend",
+                target_type="ruoyi-vue-pro-jdk17",
+                relative_path="yudao-module-member/../pom.xml",
+                content="overwritten",
+            )
+        ],
+    )
+
+    assert result["ok"] is False
+    assert result["results"][0]["reason"] == "目标路径越界，拒绝写入"
+    assert root_pom.read_text(encoding="utf-8") == "original"
+
+
+def test_backend_writer_rejects_manual_error_code_path_escape(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    module_root = repo_root / "yudao-module-member"
+    module_root.mkdir(parents=True)
+    outside_root = tmp_path / "outside"
+    outside_range = outside_root / "yudao-framework/yudao-common/src/main/java/cn/iocoder/yudao/framework/common/exception/enums/ServiceErrorCodeRange.java"
+    outside_range.parent.mkdir(parents=True, exist_ok=True)
+    outside_range.write_text(
+        """package cn.iocoder.yudao.framework.common.exception.enums;
+
+public class ServiceErrorCodeRange {
+
+    // 模块 member 错误码区间 [1-004-000-000 ~ 1-005-000-000)
+
+}
+""",
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {
+                    "path": str(repo_root),
+                    "type": "ruoyi-vue-pro-jdk17",
+                },
+                "frontend": [],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="backend",
+                target_type="ruoyi-vue-pro-jdk17",
+                relative_path="yudao-module-member/../../outside/src/main/java/cn/iocoder/yudao/module/member/enums/ErrorCodeConstants_手动操作.java",
+                content="""package cn.iocoder.yudao.module.member.enums;
+
+import cn.iocoder.yudao.framework.common.exception.ErrorCode;
+
+// Yudao Pilot Section: 商户
+public interface ErrorCodeConstants_手动操作 {
+
+    ErrorCode MERCHANT_NOT_EXISTS = new ErrorCode(0, "商户不存在");
+}
+""",
+            )
+        ],
+    )
+
+    assert result["ok"] is False
+    assert result["results"][0]["reason"] == "目标路径越界，拒绝写入"
+    assert not (
+        outside_root
+        / "src/main/java/cn/iocoder/yudao/module/member/enums/ErrorCodeConstants.java"
+    ).exists()
+
+
 def test_backend_writer_merges_manual_error_code_file(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     constants_path = repo_root / "yudao-module-member/src/main/java/cn/iocoder/yudao/module/member/enums/ErrorCodeConstants.java"

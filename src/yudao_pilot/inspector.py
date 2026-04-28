@@ -19,6 +19,19 @@ if TYPE_CHECKING:
     from .config import WorkspaceConfig
 
 
+AUTO_DISCOVERY_IGNORED_DIRS = {
+    ".git",
+    ".idea",
+    ".venv",
+    ".yudao-pilot",
+    "build",
+    "dist",
+    "node_modules",
+    "target",
+    "venv",
+}
+
+
 @dataclass
 class PomFacts:
     path: Path
@@ -111,6 +124,82 @@ def inspect_project_path(project_path: str | Path) -> dict[str, Any]:
     }
 
 
+def discover_workspace_projects(
+    workspace_root: str | Path,
+    *,
+    max_depth: int = 3,
+) -> dict[str, Any]:
+    root = Path(workspace_root).expanduser().resolve()
+    candidates = [path for path in iter_discovery_dirs(root, max_depth=max_depth)]
+
+    backend_candidates: list[dict[str, Any]] = []
+    frontend_candidates: list[dict[str, Any]] = []
+    for candidate in candidates:
+        result = inspect_project_path(candidate)
+        if not result.get("exists"):
+            continue
+        relative_path = relative_path_str(root, candidate)
+        depth = path_depth(root, candidate)
+
+        backend = result["backend"]
+        if backend.get("supported") and backend.get("detected_type"):
+            backend_candidates.append(
+                {
+                    "path": relative_path,
+                    "type": str(backend["detected_type"]),
+                    "confidence": float(backend.get("confidence") or 0.0),
+                    "depth": depth,
+                    "evidence": backend.get("evidence") or [],
+                }
+            )
+
+        frontend = result["frontend"]
+        if frontend.get("supported") and frontend.get("detected_type"):
+            frontend_candidates.append(
+                {
+                    "path": relative_path,
+                    "project_type": str(frontend["detected_type"]),
+                    "confidence": float(frontend.get("confidence") or 0.0),
+                    "depth": depth,
+                    "evidence": frontend.get("evidence") or [],
+                }
+            )
+
+    backend = None
+    if backend_candidates:
+        backend = sorted(
+            backend_candidates,
+            key=lambda item: (-item["confidence"], item["depth"], len(item["path"])),
+        )[0]
+
+    frontend_entries: list[dict[str, Any]] = []
+    seen_frontend_types: set[str] = set()
+    for candidate in sorted(
+        frontend_candidates,
+        key=lambda item: (item["depth"], -item["confidence"], len(item["path"])),
+    ):
+        for frontend_type in frontend_project_type_to_codegen_types(candidate["project_type"]):
+            if frontend_type in seen_frontend_types:
+                continue
+            seen_frontend_types.add(frontend_type)
+            frontend_entries.append(
+                {
+                    "type": frontend_type,
+                    "path": candidate["path"],
+                    "project_type": candidate["project_type"],
+                    "confidence": candidate["confidence"],
+                    "evidence": candidate["evidence"],
+                }
+            )
+
+    return {
+        "workspace_root": str(root),
+        "backend": backend,
+        "frontend": frontend_entries,
+        "scanned_paths": [relative_path_str(root, path) for path in candidates],
+    }
+
+
 def validate_backend_project(
     workspace_root: Path, configured_path: str, expected_type: str
 ) -> ProjectValidation:
@@ -197,6 +286,58 @@ def validate_frontend_project(
 
 def resolve_project_path(workspace_root: Path, configured_path: str) -> Path:
     return (workspace_root / configured_path).resolve()
+
+
+def iter_discovery_dirs(root: Path, *, max_depth: int) -> list[Path]:
+    results: list[Path] = []
+    seen: set[Path] = set()
+
+    def visit(path: Path, depth: int) -> None:
+        resolved = path.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        results.append(resolved)
+        if depth >= max_depth:
+            return
+        try:
+            children = sorted(path.iterdir(), key=lambda item: item.name)
+        except OSError:
+            return
+        for child in children:
+            if not child.is_dir():
+                continue
+            if child.name in AUTO_DISCOVERY_IGNORED_DIRS or child.name.startswith("."):
+                continue
+            visit(child, depth + 1)
+
+    visit(root, 0)
+    return results
+
+
+def relative_path_str(root: Path, path: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return str(path.resolve())
+    return "." if not relative.parts else relative.as_posix()
+
+
+def path_depth(root: Path, path: Path) -> int:
+    relative = relative_path_str(root, path)
+    return 0 if relative == "." else len(Path(relative).parts)
+
+
+def frontend_project_type_to_codegen_types(project_type: str) -> list[str]:
+    mapping = {
+        "yudao-ui-admin-vue3": ["VUE3_ELEMENT_PLUS"],
+        "yudao-ui-admin-vben": [
+            "VUE3_VBEN5_ANTD_SCHEMA",
+            "VUE3_VBEN5_EP_SCHEMA",
+        ],
+        "yudao-ui-admin-uniapp": ["VUE3_ADMIN_UNIAPP_WOT"],
+    }
+    return mapping.get(project_type, [])
 
 
 def resolve_backend_repo_root(project_path: Path) -> Path:

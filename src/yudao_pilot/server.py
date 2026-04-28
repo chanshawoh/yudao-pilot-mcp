@@ -6,6 +6,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 from pydantic import ValidationError
+import yaml
 
 from .codegen import (
     build_codegen_context,
@@ -15,6 +16,7 @@ from .codegen import (
 )
 from .config import (
     WorkspaceConfig,
+    auto_init_workspace_config,
     init_workspace_config,
     load_workspace_config,
     load_workspace_config_file,
@@ -22,7 +24,7 @@ from .config import (
 from .database import resolve_database_config
 from .database import apply_menu_plan_to_database, apply_dict_plan_to_database
 from .models import GeneratedFile, TableResolution
-from .inspector import inspect_project_path, scan_backend_table_entities, validate_workspace_projects
+from .inspector import discover_workspace_projects, inspect_project_path, scan_backend_table_entities, validate_workspace_projects
 from .schema import extract_dict_fields, inspect_table_schema
 from .scaffold import generate_scaffold_files
 from .sql_codegen import build_codegen_sql_bundle, write_codegen_sql_bundle
@@ -112,14 +114,7 @@ def load_config_or_error(
     root = get_workspace_root(workspace_root)
     config_file = load_workspace_config_file(root)
     if not config_file.exists:
-        return error_response(
-            "config_missing",
-            "工作区配置不存在，请先初始化 ./.yudao-pilot/config.yaml",
-            {
-                "workspace_root": str(root),
-                "config": config_file.model_dump(),
-            },
-        )
+        return initialize_config_response(root)
     try:
         config = load_workspace_config(root)
     except ValidationError as exc:
@@ -133,15 +128,49 @@ def load_config_or_error(
             },
         )
     except FileNotFoundError:
-        return error_response(
-            "config_missing",
-            "工作区配置不存在，请先初始化 ./.yudao-pilot/config.yaml",
-            {
-                "workspace_root": str(root),
-                "config": config_file.model_dump(),
-            },
-        )
+        return initialize_config_response(root)
     return root, config
+
+
+def initialize_config_response(root: Path) -> dict[str, Any]:
+    config_file = auto_init_workspace_config(root)
+    detected_projects = discover_workspace_projects(root)
+    config_summary = summarize_initialized_config(config_file)
+    return error_response(
+        "config_initialized",
+        "首次使用 Yudao Pilot，已经自动初始化 ./.yudao-pilot/config.yaml，并根据当前 MCP Client 项目根目录补充项目路径。请先让用户确认：继续执行当前操作，还是先结束以便手动审阅或编辑 yaml。",
+        {
+            "workspace_root": str(root),
+            "initialized": True,
+            "should_stop": True,
+            "config": config_file.model_dump(),
+            "detected_projects": detected_projects,
+            "config_summary": config_summary,
+            "next_action_prompt": (
+                "当前 MCP 初始化的 ./.yudao-pilot/config.yaml 已经准备好。"
+                "请向用户说明已识别并写入的后端/前端项目目录，然后询问："
+                "是否继续执行刚才的操作，还是先结束会话以便手动审阅或编辑 yaml？"
+            ),
+        },
+    )
+
+
+def summarize_initialized_config(config_file: Any) -> dict[str, Any]:
+    content = getattr(config_file, "content", None) or ""
+    try:
+        config = WorkspaceConfig.model_validate(yaml.safe_load(content) or {})
+    except Exception:
+        return {"backend": None, "frontends": []}
+    return {
+        "backend": {
+            "type": config.projects.backend.type,
+            "path": config.projects.backend.path,
+        },
+        "frontends": [
+            {"type": frontend.type, "path": frontend.path}
+            for frontend in config.projects.frontend
+        ],
+    }
 
 
 @mcp.tool
@@ -150,14 +179,7 @@ def load_workspace_config_tool(workspace_root: str | None = None) -> dict[str, A
     root = get_workspace_root(workspace_root)
     config_file = load_workspace_config_file(root)
     if not config_file.exists:
-        return error_response(
-            "config_missing",
-            "工作区配置不存在，请先初始化 ./.yudao-pilot/config.yaml",
-            {
-                "workspace_root": str(root),
-                "config": config_file.model_dump(),
-            },
-        )
+        return initialize_config_response(root)
     return success_response(
         "工作区配置加载成功",
         {
@@ -173,7 +195,7 @@ def init_workspace_config_tool(
 ) -> dict[str, Any]:
     """初始化当前工作区配置文件。"""
     root = get_workspace_root(workspace_root)
-    config_file = init_workspace_config(root, overwrite=overwrite)
+    config_file = auto_init_workspace_config(root, overwrite=overwrite)
     return success_response(
         "工作区配置模板已生成",
         {
@@ -610,6 +632,7 @@ def infer_table_resolution(
     config: WorkspaceConfig,
     *,
     backend_root: Path | None = None,
+    create_missing_module: bool = False,
 ) -> TableResolution:
     # 1) manual_rules exact match
     if config.codegen.manual_rules:
@@ -656,15 +679,17 @@ def infer_table_resolution(
     if backend_root:
         module_dir = backend_root / f"yudao-module-{inferred_module}"
         if module_dir.is_dir():
-            _ensure_module_enabled(backend_root, inferred_module)
+            if create_missing_module:
+                _ensure_module_enabled(backend_root, inferred_module)
             return TableResolution(
                 module=inferred_module,
                 matched_by="new_module",
                 business=derive_business_name(inferred_module, table_name),
                 entity=snake_to_pascal(table_name),
             )
-        _create_module_scaffold(backend_root, inferred_module)
-        _ensure_module_enabled(backend_root, inferred_module)
+        if create_missing_module:
+            _create_module_scaffold(backend_root, inferred_module)
+            _ensure_module_enabled(backend_root, inferred_module)
         return TableResolution(
             module=inferred_module,
             matched_by="new_module",

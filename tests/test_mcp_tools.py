@@ -2394,6 +2394,35 @@ def test_infer_resolution_no_backend_root_falls_back(workspace_builder) -> None:
     assert r.module == "completely"
 
 
+def test_infer_resolution_does_not_create_new_module_by_default(workspace_builder, tmp_path: Path) -> None:
+    from yudao_pilot.config import load_workspace_config
+
+    backend_root = tmp_path / "fake-backend"
+    backend_root.mkdir()
+    (backend_root / "yudao-server").mkdir()
+    root_pom = backend_root / "pom.xml"
+    root_pom.write_text("<project><modules></modules></project>", encoding="utf-8")
+    server_pom = backend_root / "yudao-server" / "pom.xml"
+    server_pom.write_text("<project><dependencies></dependencies></project>", encoding="utf-8")
+
+    ws = workspace_builder(
+        manual_rules_yaml="""\
+- module: member
+  table_prefixes: []
+  table_rules: []
+""",
+    )
+    config = load_workspace_config(ws)
+
+    r = infer_table_resolution("logistics_order", config, backend_root=backend_root)
+
+    assert r.matched_by == "new_module"
+    assert r.module == "logistics"
+    assert not (backend_root / "yudao-module-logistics").exists()
+    assert root_pom.read_text(encoding="utf-8") == "<project><modules></modules></project>"
+    assert server_pom.read_text(encoding="utf-8") == "<project><dependencies></dependencies></project>"
+
+
 # ---------------------------------------------------------------------------
 # New module creation
 # ---------------------------------------------------------------------------
@@ -2477,7 +2506,7 @@ def test_ensure_module_enabled_adds_new_module(tmp_path: Path) -> None:
     assert "<artifactId>yudao-module-logistics</artifactId>" in server_pom.read_text()
 
 
-def test_infer_resolution_new_module_creates_scaffold(workspace_builder, tmp_path: Path) -> None:
+def test_infer_resolution_new_module_creates_scaffold_when_requested(workspace_builder, tmp_path: Path) -> None:
     from yudao_pilot.config import load_workspace_config
 
     backend_root = tmp_path / "fake-backend"
@@ -2498,7 +2527,12 @@ def test_infer_resolution_new_module_creates_scaffold(workspace_builder, tmp_pat
 """,
     )
     config = load_workspace_config(ws)
-    r = infer_table_resolution("logistics_order", config, backend_root=backend_root)
+    r = infer_table_resolution(
+        "logistics_order",
+        config,
+        backend_root=backend_root,
+        create_missing_module=True,
+    )
     assert r.matched_by == "new_module"
     assert r.module == "logistics"
     assert (backend_root / "yudao-module-logistics" / "pom.xml").exists()

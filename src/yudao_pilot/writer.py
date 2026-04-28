@@ -29,17 +29,23 @@ def write_generated_files(
                 )
             )
             continue
+        base_dir = base_dir.resolve()
+        output_path = (base_dir / generated_file.relative_path).resolve()
 
         if generated_file.target_kind == "backend":
             backend_module_dir = resolve_backend_module_dir(base_dir, generated_file.relative_path)
-            if backend_module_dir is None:
+            if backend_module_dir is None or not is_relative_to(output_path, backend_module_dir):
                 results.append(
                     WriteResult(
                         target_kind=generated_file.target_kind,
                         target_type=generated_file.target_type,
-                        path=str((base_dir / generated_file.relative_path).resolve()),
+                        path=str(output_path),
                         written=False,
-                        reason="目标后端模块不存在，拒绝创建新的模块结构",
+                        reason=(
+                            "目标后端模块不存在，拒绝创建新的模块结构"
+                            if backend_module_dir is None
+                            else "目标路径越界，拒绝写入"
+                        ),
                     )
                 )
                 continue
@@ -56,7 +62,6 @@ def write_generated_files(
                 )
                 continue
 
-        output_path = (base_dir / generated_file.relative_path).resolve()
         if not is_relative_to(output_path, base_dir):
             results.append(
                 WriteResult(
@@ -128,7 +133,7 @@ def resolve_backend_module_dir(base_dir: Path, relative_path: str) -> Path | Non
     parts = relative.parts
     if not parts:
         return None
-    module_dir = base_dir / parts[0]
+    module_dir = (base_dir / parts[0]).resolve()
     if not module_dir.exists() or not module_dir.is_dir():
         return None
     return module_dir

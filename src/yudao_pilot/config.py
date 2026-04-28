@@ -6,6 +6,7 @@ from textwrap import dedent
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .inspector import discover_workspace_projects
 from .models import DatabaseConfig, FrontendType, RoutingMode, SqlAssetMode, WorkspaceConfigFile
 
 
@@ -223,3 +224,76 @@ def init_workspace_config(
     content = default_config_template()
     config_path.write_text(content, encoding="utf-8")
     return WorkspaceConfigFile(path=str(config_path), exists=True, content=content)
+
+
+def auto_init_workspace_config(
+    workspace_root: str | Path,
+    *,
+    overwrite: bool = False,
+    scan_depth: int = 3,
+) -> WorkspaceConfigFile:
+    config_path = resolve_config_path(workspace_root)
+    if config_path.exists() and not overwrite:
+        return WorkspaceConfigFile(
+            path=str(config_path),
+            exists=True,
+            content=config_path.read_text(encoding="utf-8"),
+        )
+
+    root = Path(workspace_root).expanduser().resolve()
+    discovered = discover_workspace_projects(root, max_depth=scan_depth)
+    content = render_auto_config(root, discovered)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(content, encoding="utf-8")
+    return WorkspaceConfigFile(path=str(config_path), exists=True, content=content)
+
+
+def render_auto_config(workspace_root: Path, discovered: dict) -> str:
+    backend = discovered.get("backend") or {}
+    backend_path = str(backend.get("path") or "../yudao-server")
+    backend_type = str(backend.get("type") or "ruoyi-vue-pro-jdk17")
+    frontend_projects = discovered.get("frontend") or []
+
+    raw_config = {
+        "version": 1,
+        "workspace": {"name": workspace_root.name or "my-yudao-workspace"},
+        "projects": {
+            "backend": {
+                "path": backend_path,
+                "type": backend_type,
+                "config_profile": "local",
+            },
+            "frontend": [
+                {"type": item["type"], "path": item["path"]}
+                for item in frontend_projects
+            ],
+        },
+        "database": {
+            "mode": "auto",
+            "host": "",
+            "port": 3306,
+            "database": "",
+            "username": "",
+            "password": "",
+        },
+        "codegen": {
+            "apply_to_database": False,
+            "routing": {"mode": "manual"},
+            "menu_sql_mode": "auto",
+            "dict_sql_mode": "auto",
+            "manual_rules": [
+                {
+                    "module": "member",
+                    "table_prefixes": ["merchant_user", "merchant", "member"],
+                    "table_rules": [
+                        {
+                            "table": "member",
+                            "business": "member",
+                            "entity": "Member",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    return yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True)

@@ -48,8 +48,11 @@ def is_manual_error_code_file(relative_path: str) -> bool:
 def merge_manual_error_code_file(
     repo_root: Path, generated_file: GeneratedFile
 ) -> tuple[bool, str, str | None]:
+    repo_root = repo_root.resolve()
     manual_path = (repo_root / generated_file.relative_path).resolve()
     actual_path = resolve_actual_error_code_path(repo_root, generated_file.relative_path)
+    if not is_within_root(manual_path, repo_root) or not is_within_root(actual_path, repo_root):
+        return False, str(actual_path), "目标路径越界，拒绝写入"
     module_name = resolve_module_name_from_relative_path(generated_file.relative_path)
     if module_name is None:
         return False, str(actual_path), "无法从错误码文件路径中解析模块名"
@@ -88,6 +91,14 @@ def merge_manual_error_code_file(
 
 def resolve_actual_error_code_path(repo_root: Path, relative_path: str) -> Path:
     return (repo_root / relative_path.replace(MANUAL_ERROR_CODE_FILENAME, TARGET_ERROR_CODE_FILENAME)).resolve()
+
+
+def is_within_root(candidate: Path, root: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def resolve_module_name_from_relative_path(relative_path: str) -> str | None:
