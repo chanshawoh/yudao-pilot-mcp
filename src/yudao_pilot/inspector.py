@@ -96,7 +96,7 @@ def inspect_project_path(project_path: str | Path) -> dict[str, Any]:
                 evidence=["项目路径不存在"],
             ).model_dump(),
             "supported_backend_types": list(SUPPORTED_BACKEND_TYPES),
-            "supported_frontend_types": list(SUPPORTED_FRONTEND_TYPES),
+            "supported_frontend_types": list(SUPPORTED_FRONTEND_PROJECT_TYPES),
             "supported_frontend_project_types": list(SUPPORTED_FRONTEND_PROJECT_TYPES),
         }
 
@@ -371,9 +371,9 @@ def inspect_backend_project(project_path: Path) -> ProjectDetection:
     root_facts = parse_pom(root_pom_path)
     effective_root_facts = root_facts
     if (
-        root_facts.artifact_id == "yudao-server"
-        and root_facts.parent_group_id == "cn.iocoder.boot"
-        and root_facts.parent_artifact_id == "yudao"
+        root_facts.packaging == "jar"
+        and is_yudao_server_artifact(root_facts.artifact_id)
+        and root_facts.parent_artifact_id
     ):
         parent_pom_path = project_path.parent / "pom.xml"
         if parent_pom_path.exists():
@@ -399,9 +399,12 @@ def inspect_backend_project(project_path: Path) -> ProjectDetection:
     if effective_root_facts.group_id == "cn.iocoder.boot" and effective_root_facts.artifact_id == "yudao":
         yudao_score += 2
         evidence.append("根 pom 的 groupId/artifactId 为 cn.iocoder.boot:yudao")
-    elif root_facts.artifact_id == "yudao-server" and root_facts.parent_artifact_id == "yudao":
+    elif root_facts.packaging == "jar" and is_yudao_server_artifact(root_facts.artifact_id):
         yudao_score += 2
-        evidence.append("当前 pom 为 yudao-server，且父工程为 cn.iocoder.boot:yudao")
+        evidence.append(f"当前 pom 为后端启动模块（artifactId={root_facts.artifact_id}）")
+    module_score, module_evidence = score_yudao_module_layout(effective_root_facts.modules)
+    yudao_score += module_score
+    evidence.extend(module_evidence)
     if ("cn.iocoder.boot", "yudao-dependencies") in imported_boms:
         yudao_score += 3
         evidence.append("dependencyManagement 引入了 cn.iocoder.boot:yudao-dependencies")
@@ -450,6 +453,49 @@ def inspect_backend_project(project_path: Path) -> ProjectDetection:
         confidence=confidence if detected_type else min(confidence, 0.79),
         evidence=deduplicate_preserve_order(evidence),
     )
+
+
+def is_yudao_server_artifact(artifact_id: str | None) -> bool:
+    if not artifact_id:
+        return False
+    normalized = artifact_id.lower()
+    return normalized == "yudao-server" or normalized.endswith("-server")
+
+
+def score_yudao_module_layout(modules: list[str]) -> tuple[int, list[str]]:
+    module_set = set(modules)
+    score = 0
+    evidence: list[str] = []
+
+    exact_markers = {
+        "yudao-dependencies": "modules 中包含 yudao-dependencies",
+        "yudao-framework": "modules 中包含 yudao-framework",
+        "yudao-server": "modules 中包含 yudao-server",
+        "yudao-module-system": "modules 中包含 yudao-module-system",
+        "yudao-module-infra": "modules 中包含 yudao-module-infra",
+    }
+    for module, message in exact_markers.items():
+        if module in module_set:
+            score += 1
+            evidence.append(message)
+
+    yudao_business_modules = sorted(
+        module for module in module_set if module.startswith("yudao-module-")
+    )
+    if yudao_business_modules:
+        score += min(2, len(yudao_business_modules))
+        evidence.append(
+            "modules 中包含 yudao-module-* 子模块: "
+            + ", ".join(yudao_business_modules[:5])
+        )
+
+    if "yudao-framework" in module_set and any(
+        module.startswith("yudao-module-") for module in module_set
+    ):
+        score += 2
+        evidence.append("modules 同时包含 yudao-framework 与 yudao-module-* 结构")
+
+    return min(score, 6), evidence
 
 
 def inspect_frontend_project(project_path: Path) -> ProjectDetection:

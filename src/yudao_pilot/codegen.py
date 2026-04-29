@@ -296,6 +296,7 @@ def build_codegen_context(
         "module_name": effective_module_name,
         "configured_module_name": module_name,
         "business_name": business_name,
+        "backend_business_name": generated_file_plan["backend_business_name"],
         "entity_name": entity_name,
         "menu_name": menu_name or entity_name,
         "codegen_sql": {
@@ -804,13 +805,14 @@ def build_generated_file_plan(
     backend_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     simple_class_name = build_simple_class_name(module_name, entity_name)
+    backend_business_name = normalize_backend_business_name(business_name) or normalize_backend_business_name(table_name)
     frontend_business_path = build_frontend_business_path(
         business_name=business_name,
         table_name=table_name,
     )
     backend_files = build_backend_file_plan(
         module_name=module_name,
-        business_name=business_name,
+        business_name=backend_business_name,
         entity_name=entity_name,
         base_package=base_package,
         unit_test_enable=unit_test_enable,
@@ -836,6 +838,7 @@ def build_generated_file_plan(
     return {
         "backend": backend_files,
         "frontends": frontend_files,
+        "backend_business_name": backend_business_name,
         "frontend_business_path": frontend_business_path,
         "simple_class_name": simple_class_name,
         "backend_target": backend_target or {
@@ -980,21 +983,41 @@ def build_frontend_file_plan(
 def build_frontend_business_path(*, business_name: str, table_name: str) -> str:
     raw_business = str(business_name or "").replace("\\", "/").strip().strip("/")
     if not raw_business:
-        return normalize_snake_case(table_name).replace("_", "/")
+        return normalize_frontend_business_path(normalize_snake_case(table_name).replace("_", "/"))
 
     business_segments = [segment.strip() for segment in raw_business.split("/") if segment.strip()]
     if not business_segments:
-        return normalize_snake_case(table_name).replace("_", "/")
+        return normalize_frontend_business_path(normalize_snake_case(table_name).replace("_", "/"))
 
     business_leaf = normalize_snake_case(business_segments[-1])
     normalized_table = normalize_snake_case(table_name)
     if normalized_table == business_leaf:
-        return "/".join(business_segments)
+        return normalize_frontend_business_path("/".join(business_segments))
     if normalized_table.startswith(business_leaf + "_"):
         suffix = normalized_table[len(business_leaf) + 1 :]
         if suffix:
-            return "/".join(business_segments + suffix.split("_"))
-    return "/".join(business_segments)
+            return normalize_frontend_business_path("/".join(business_segments + suffix.split("_")))
+    return normalize_frontend_business_path("/".join(business_segments))
+
+
+def normalize_frontend_business_path(value: str) -> str:
+    segments = [segment for segment in str(value or "").replace("\\", "/").split("/") if segment.strip()]
+    normalized_segments = [snake_to_lower_camel(segment) for segment in segments]
+    return "/".join(segment for segment in normalized_segments if segment)
+
+
+def normalize_backend_business_name(value: str) -> str:
+    segments = [segment for segment in str(value or "").replace("\\", "/").split("/") if segment.strip()]
+    normalized_segments = [normalize_snake_case(segment).replace("_", "") for segment in segments]
+    return "/".join(segment for segment in normalized_segments if segment)
+
+
+def snake_to_lower_camel(value: str) -> str:
+    normalized = normalize_snake_case(value)
+    if not normalized:
+        return ""
+    pascal = snake_to_pascal(normalized)
+    return pascal[:1].lower() + pascal[1:] if pascal else ""
 
 
 def resolve_vben_frontend_root(front_type: int) -> str:

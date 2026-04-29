@@ -189,7 +189,7 @@ public class {class_name}SaveReqVO {{
 def render_controller(relative_path: str, context: dict[str, Any]) -> str:
     package_name = java_package_from_path(relative_path)
     class_name = context["entity_name"]
-    business_name = context["business_name"]
+    business_name = resolve_backend_business_name(context)
     module_name = context["module_name"]
     url_path = business_name.replace("/", "-").replace("_", "-")
     entity_label = resolve_controller_entity_label(context)
@@ -310,7 +310,7 @@ def render_mapper(relative_path: str, context: dict[str, Any]) -> str:
     package_name = java_package_from_path(relative_path)
     class_name = context["entity_name"]
     module_name = context["module_name"]
-    business_name = context["business_name"]
+    business_name = resolve_backend_business_name(context)
     base_package = context["backend_codegen_defaults"]["base_package"]
     query_fields = get_query_fields(context)
     query_lines = render_mapper_query_lines(class_name, query_fields)
@@ -341,7 +341,7 @@ def render_mapper(relative_path: str, context: dict[str, Any]) -> str:
 def render_mapper_xml(context: dict[str, Any]) -> str:
     base_package = context["backend_codegen_defaults"]["base_package"]
     module_name = context["module_name"]
-    business_name = context["business_name"]
+    business_name = resolve_backend_business_name(context)
     class_name = context["entity_name"]
     return dedent(
         f"""\
@@ -360,7 +360,7 @@ def render_service(relative_path: str, context: dict[str, Any]) -> str:
     package_name = java_package_from_path(relative_path)
     class_name = context["entity_name"]
     module_name = context["module_name"]
-    business_name = context["business_name"]
+    business_name = resolve_backend_business_name(context)
     base_package = context["backend_codegen_defaults"]["base_package"]
     validation_package = resolve_validation_package(context["backend_project"]["type"])
     return dedent(
@@ -393,7 +393,7 @@ def render_service_impl(relative_path: str, context: dict[str, Any]) -> str:
     package_name = java_package_from_path(relative_path)
     class_name = context["entity_name"]
     module_name = context["module_name"]
-    business_name = context["business_name"]
+    business_name = resolve_backend_business_name(context)
     base_package = context["backend_codegen_defaults"]["base_package"]
     resource_package = resolve_resource_package(context["backend_project"]["type"])
     error_const = upper_snake(class_name) + "_NOT_EXISTS"
@@ -509,7 +509,7 @@ def render_frontend_api(
     module_name = context["module_name"]
     entity_name = context["entity_name"]
     lower_name = lower_camel(entity_name)
-    business_name = str(context["business_name"]).strip().strip("/")
+    business_name = resolve_backend_business_name(context).strip().strip("/")
     url_path = business_name.replace("/", "-").replace("_", "-")
     frontend_business_path = (
         frontend_plan.get("frontend_business_path")
@@ -1796,6 +1796,15 @@ def resolve_resource_package(backend_type: str) -> str:
 
 def lower_camel(value: str) -> str:
     return value[:1].lower() + value[1:] if value else value
+
+
+def resolve_backend_business_name(context: dict[str, Any]) -> str:
+    generated_plan = context.get("generated_file_plan") or {}
+    return str(
+        context.get("backend_business_name")
+        or generated_plan.get("backend_business_name")
+        or context["business_name"]
+    )
 
 
 def is_vben_codegen_type(project_type: str) -> bool:

@@ -21,7 +21,13 @@ from yudao_pilot.server import (
     _create_module_scaffold,
     _ensure_module_enabled,
 )
-from yudao_pilot.codegen import resolve_backend_codegen_target, build_generated_file_plan
+from yudao_pilot.codegen import (
+    build_frontend_business_path,
+    build_generated_file_plan,
+    normalize_backend_business_name,
+    resolve_backend_codegen_target,
+)
+from yudao_pilot.scaffold import render_backend_file, render_frontend_file
 from yudao_pilot.sql_codegen import merge_sql_snippet, resolve_h2_sql_plan
 
 
@@ -449,6 +455,108 @@ def test_generate_codegen_scaffold_uses_suffix_subdirectory_when_frontend_busine
 
     assert all("/member/merchant/user/" in path for path in frontend_paths)
     assert result["data"]["context"]["generated_file_plan"]["frontend_business_path"] == "merchant/user"
+
+
+def test_frontend_business_path_uses_lower_camel_segments() -> None:
+    assert build_frontend_business_path(
+        business_name="sim_spu",
+        table_name="travel_sim_spu",
+    ) == "simSpu"
+    assert build_frontend_business_path(
+        business_name="merchant",
+        table_name="merchant_user",
+    ) == "merchant/user"
+
+
+def test_generated_frontend_paths_use_lower_camel_business_name() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[
+            {
+                "project_type": "VUE3_ELEMENT_PLUS",
+                "default_front_type": 20,
+                "default_front_type_label": "Vue3 Element Plus",
+                "ambiguous": False,
+            }
+        ],
+        unit_test_enable=False,
+    )
+
+    assert plan["frontend_business_path"] == "simSpu"
+    assert "src/views/travel/simSpu/index.vue" in plan["frontends"][0]["relative_paths"]
+    assert "src/api/travel/simSpu/index.ts" in plan["frontends"][0]["relative_paths"]
+    assert not any("sim_spu" in path for path in plan["frontends"][0]["relative_paths"])
+
+
+def test_backend_business_name_removes_underscores() -> None:
+    assert normalize_backend_business_name("sim_spu") == "simspu"
+    assert normalize_backend_business_name("hotel/room_type") == "hotel/roomtype"
+
+
+def test_generated_backend_paths_use_compact_business_name() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[],
+        unit_test_enable=False,
+    )
+
+    assert plan["backend_business_name"] == "simspu"
+    assert any("/controller/admin/simspu/" in path for path in plan["backend"])
+    assert any("/dal/dataobject/simspu/" in path for path in plan["backend"])
+    assert not any("/sim_spu/" in path for path in plan["backend"])
+
+
+def test_rendered_backend_and_frontend_use_split_business_names() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[
+            {
+                "project_type": "VUE3_ELEMENT_PLUS",
+                "default_front_type": 20,
+                "default_front_type_label": "Vue3 Element Plus",
+                "ambiguous": False,
+            }
+        ],
+        unit_test_enable=False,
+    )
+    context = {
+        "table_name": "travel_sim_spu",
+        "module_name": "travel",
+        "business_name": "sim_spu",
+        "entity_name": "TravelSimSpu",
+        "menu_name": "商品",
+        "permission_prefix": "travel:sim-spu",
+        "backend_project": {"type": "ruoyi-vue-pro-jdk17"},
+        "backend_codegen_defaults": {"base_package": "cn.iocoder.yudao"},
+        "table_schema": {"columns": []},
+        "generated_file_plan": plan,
+    }
+
+    controller_path = next(path for path in plan["backend"] if path.endswith("Controller.java"))
+    controller_java = render_backend_file(controller_path, context)
+    frontend_plan = plan["frontends"][0]
+    frontend_api = render_frontend_file(
+        "src/api/travel/simSpu/index.ts",
+        frontend_plan,
+        context,
+    )
+
+    assert ".controller.admin.simspu." in controller_java
+    assert '@RequestMapping("/travel/simspu")' in controller_java
+    assert "/admin-api/travel/simspu/page" in frontend_api
+    assert "@/api/travel/simSpu" not in frontend_api
 
 
 def test_generate_codegen_scaffold_uses_simple_class_name_for_vue3_form_import(
