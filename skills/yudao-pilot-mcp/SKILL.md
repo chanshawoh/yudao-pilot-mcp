@@ -103,6 +103,11 @@ If the current MCP client has no `yudao-pilot` server configured, add it to the 
 - Respect `./.yudao-pilot/config.yaml` as the routing source of truth.
 - Do not guess backend/frontend paths by directory names alone; rely on MCP project detection and validation.
 - For aggregator Maven modules with `packaging=pom`, do not write Java code into the aggregator itself. Use the MCP-generated backend target, which may select an existing child jar module or propose a new child module path.
+- If the user explicitly says to generate into a nested backend module such as `模块 A -> B -> 新建模块`, pass an explicit backend target instead of relying on inference:
+  - `module_name`: logical/root menu module, for example `travel`
+  - `backend_module_dir`: target Maven module path, for example `travel/sim-spu` or `yudao-module-travel/yudao-module-sim-spu`
+  - `backend_package_module`: Java package module segment, for example `simspu`
+  - For a new explicit nested module, check that the generated file plan includes `backend_module_dir/pom.xml` before writing files.
 - Do not write menu/dict SQL to a real database unless `codegen.apply_to_database=true`.
 - If MCP returns `should_stop=true`, pause the current generation and report the requested user decision.
 - If generated target paths look wrong, stop and inspect `resolved_from_config`, `backend_project.codegen_target`, and `generated_file_plan` before writing.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .config import WorkspaceConfig
@@ -15,6 +16,7 @@ def write_generated_files(
 ) -> dict[str, object]:
     root = Path(workspace_root).expanduser().resolve()
     results: list[WriteResult] = []
+    frontend_targets_seen: set[str] = set()
 
     for generated_file in files:
         base_dir = resolve_target_base_dir(root, config, generated_file.target_kind, generated_file.target_type)
@@ -31,6 +33,8 @@ def write_generated_files(
             continue
         base_dir = base_dir.resolve()
         output_path = (base_dir / generated_file.relative_path).resolve()
+        if generated_file.target_kind == "frontend":
+            frontend_targets_seen.add(generated_file.target_type)
 
         if generated_file.target_kind == "backend":
             backend_module_dir = resolve_backend_module_dir(base_dir, generated_file.relative_path)
@@ -74,6 +78,19 @@ def write_generated_files(
             )
             continue
 
+        if generated_file.target_kind == "frontend" and is_frontend_dict_file(generated_file.relative_path):
+            merged, merge_reason = merge_frontend_dict_type_file(output_path, generated_file.content)
+            results.append(
+                WriteResult(
+                    target_kind=generated_file.target_kind,
+                    target_type=generated_file.target_type,
+                    path=str(output_path),
+                    written=merged,
+                    reason=None if merged else merge_reason,
+                )
+            )
+            continue
+
         if output_path.exists() and not generated_file.overwrite:
             results.append(
                 WriteResult(
@@ -94,6 +111,24 @@ def write_generated_files(
                 target_type=generated_file.target_type,
                 path=str(output_path),
                 written=True,
+            )
+        )
+
+    for target_type in sorted(frontend_targets_seen):
+        base_dir = resolve_target_base_dir(root, config, "frontend", target_type)
+        if base_dir is None:
+            continue
+        repair_dict_result = repair_frontend_dict_type_file(base_dir / "src" / "utils" / "dict.ts")
+        if repair_dict_result is None:
+            continue
+        repaired, repair_reason = repair_dict_result
+        results.append(
+            WriteResult(
+                target_kind="frontend",
+                target_type=target_type,
+                path=str((base_dir / "src" / "utils" / "dict.ts").resolve()),
+                written=repaired,
+                reason=None if repaired else repair_reason,
             )
         )
 
@@ -137,3 +172,128 @@ def resolve_backend_module_dir(base_dir: Path, relative_path: str) -> Path | Non
     if not module_dir.exists() or not module_dir.is_dir():
         return None
     return module_dir
+
+
+def is_frontend_dict_file(relative_path: str) -> bool:
+    return Path(relative_path).as_posix() == "src/utils/dict.ts"
+
+
+def merge_frontend_dict_type_file(file_path: Path, additions: str) -> tuple[bool, str | None]:
+    constants = parse_dict_type_additions(additions)
+    if not file_path.exists():
+        return False, "前端字典常量文件不存在，无法合并 DICT_TYPE"
+
+    text = file_path.read_text(encoding="utf-8")
+    existing_names = set(re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*=", text, flags=re.MULTILINE))
+    existing_values = set(re.findall(r"=\s*['\"]([^'\"]+)['\"]\s*,?", text))
+    missing = [
+        (name, value, comment)
+        for name, value, comment in constants
+        if name not in existing_names and value not in existing_values
+    ]
+
+    lines = text.splitlines()
+    enum_start = next(
+        (index for index, line in enumerate(lines) if re.match(r"\s*export\s+enum\s+DICT_TYPE\s*\{", line)),
+        None,
+    )
+    if enum_start is None:
+        return False, "未找到 export enum DICT_TYPE，无法合并字典常量"
+
+    enum_end = next(
+        (index for index in range(enum_start + 1, len(lines)) if lines[index].strip() == "}"),
+        None,
+    )
+    if enum_end is None:
+        return False, "DICT_TYPE enum 未找到结束位置，无法合并字典常量"
+
+    lines, repaired = repair_enum_member_commas(lines, enum_start, enum_end)
+    insert_lines = [
+        f"  {name} = '{value}'," + (f" // {comment}" if comment else "")
+        for name, value, comment in missing
+    ]
+    if missing:
+        updated = lines[:enum_end] + insert_lines + lines[enum_end:]
+    else:
+        updated = lines
+    if missing or repaired:
+        file_path.write_text("\n".join(updated) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+    return True, None
+
+
+def repair_frontend_dict_type_file(file_path: Path) -> tuple[bool, str | None] | None:
+    if not file_path.exists():
+        return None
+
+    text = file_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    enum_start = next(
+        (index for index, line in enumerate(lines) if re.match(r"\s*export\s+enum\s+DICT_TYPE\s*\{", line)),
+        None,
+    )
+    if enum_start is None:
+        return False, "未找到 export enum DICT_TYPE，无法修复字典常量"
+    enum_end = next(
+        (index for index in range(enum_start + 1, len(lines)) if lines[index].strip() == "}"),
+        None,
+    )
+    if enum_end is None:
+        return False, "DICT_TYPE enum 未找到结束位置，无法修复字典常量"
+
+    repaired_lines, repaired = repair_enum_member_commas(lines, enum_start, enum_end)
+    if repaired:
+        file_path.write_text(
+            "\n".join(repaired_lines) + ("\n" if text.endswith("\n") else ""),
+            encoding="utf-8",
+        )
+    return True, None
+
+
+def parse_dict_type_additions(content: str) -> list[tuple[str, str, str]]:
+    result: list[tuple[str, str, str]] = []
+    pattern = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*'([^']+)'\s*,?\s*(?://\s*(.*))?$")
+    for line in content.splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        result.append((match.group(1), match.group(2), (match.group(3) or "").strip()))
+    return result
+
+
+def repair_enum_member_commas(lines: list[str], enum_start: int, enum_end: int) -> tuple[list[str], bool]:
+    repaired = False
+    updated = list(lines)
+    for index in range(enum_start + 1, enum_end):
+        if not is_enum_member_line(updated[index]):
+            continue
+        next_member = next(
+            (
+                next_index
+                for next_index in range(index + 1, enum_end)
+                if updated[next_index].strip()
+                and not updated[next_index].lstrip().startswith("//")
+            ),
+            None,
+        )
+        if next_member is None or not is_enum_member_line(updated[next_member]):
+            continue
+        repaired_line = ensure_enum_member_trailing_comma(updated[index])
+        if repaired_line != updated[index]:
+            updated[index] = repaired_line
+            repaired = True
+    return updated, repaired
+
+
+def is_enum_member_line(line: str) -> bool:
+    return bool(re.match(r"\s*[A-Z][A-Z0-9_]*\s*=\s*['\"][^'\"]+['\"]", line))
+
+
+def ensure_enum_member_trailing_comma(line: str) -> str:
+    code, separator, comment = line.partition("//")
+    stripped_code = code.rstrip()
+    if stripped_code.endswith(","):
+        return line
+    repaired = f"{stripped_code},"
+    if separator:
+        repaired += f" {separator}{comment}"
+    return repaired

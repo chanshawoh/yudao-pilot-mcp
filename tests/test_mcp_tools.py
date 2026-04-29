@@ -22,12 +22,23 @@ from yudao_pilot.server import (
     _ensure_module_enabled,
 )
 from yudao_pilot.codegen import (
+    build_codegen_context,
     build_frontend_business_path,
     build_generated_file_plan,
     normalize_backend_business_name,
+    normalize_backend_module_dir,
     resolve_backend_codegen_target,
+    resolve_backend_business_name,
+    resolve_frontend_codegen_targets,
 )
-from yudao_pilot.scaffold import render_backend_file, render_frontend_file
+from yudao_pilot.config import WorkspaceConfig
+from yudao_pilot.scaffold import (
+    generate_scaffold_files,
+    render_backend_file,
+    render_frontend_file,
+    render_vue3_dict_options_expr,
+    render_vue3_dict_type_expr,
+)
 from yudao_pilot.sql_codegen import merge_sql_snippet, resolve_h2_sql_plan
 
 
@@ -339,7 +350,7 @@ def test_generate_codegen_scaffold_includes_field_level_content(workspace_builde
     form_vue = next(
         item
         for item in generated_files
-        if item["relative_path"].endswith("Demo01ContactForm.vue")
+        if item["relative_path"].endswith("demo01ContactForm.vue")
     )
 
     assert "private String name;" in save_req["content"]
@@ -425,6 +436,49 @@ def test_generate_codegen_scaffold_supports_all_vben_variants(workspace_builder)
     )
 
 
+def test_vben_child_app_frontend_path_generates_app_local_paths(tmp_path: Path) -> None:
+    web_ele = tmp_path / "frontend" / "apps" / "web-ele"
+    web_ele.mkdir(parents=True)
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {
+                    "path": str(tmp_path / "backend"),
+                    "type": "ruoyi-vue-pro-jdk17",
+                },
+                "frontend": [
+                    {"type": "VUE3_VBEN5_EP_SCHEMA", "path": str(web_ele)},
+                ],
+            },
+            "codegen": {
+                "routing": {"mode": "manual"},
+                "manual_rules": [
+                    {
+                        "module": "member",
+                        "table_prefixes": ["merchant"],
+                        "table_rules": [],
+                    }
+                ],
+            },
+        }
+    )
+
+    frontend_targets = resolve_frontend_codegen_targets(tmp_path, config)
+    plan = build_generated_file_plan(
+        table_name="merchant",
+        module_name="member",
+        business_name="merchant",
+        entity_name="Merchant",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=frontend_targets,
+        unit_test_enable=False,
+    )
+
+    paths = plan["frontends"][0]["relative_paths"]
+    assert "src/views/member/merchant/data.ts" in paths
+    assert not any(path.startswith("apps/web-ele/") for path in paths)
+
+
 def test_generate_codegen_scaffold_uses_suffix_subdirectory_when_frontend_business_collides(
     workspace_builder,
 ) -> None:
@@ -488,13 +542,133 @@ def test_generated_frontend_paths_use_lower_camel_business_name() -> None:
 
     assert plan["frontend_business_path"] == "simSpu"
     assert "src/views/travel/simSpu/index.vue" in plan["frontends"][0]["relative_paths"]
+    assert "src/views/travel/simSpu/simSpuForm.vue" in plan["frontends"][0]["relative_paths"]
     assert "src/api/travel/simSpu/index.ts" in plan["frontends"][0]["relative_paths"]
     assert not any("sim_spu" in path for path in plan["frontends"][0]["relative_paths"])
+
+
+def test_vue3_index_imports_lower_camel_form_file() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[
+            {
+                "project_type": "VUE3_ELEMENT_PLUS",
+                "default_front_type": 20,
+                "default_front_type_label": "Vue3 Element Plus",
+                "ambiguous": False,
+            }
+        ],
+        unit_test_enable=False,
+    )
+    context = {
+        "table_name": "travel_sim_spu",
+        "module_name": "travel",
+        "business_name": "sim_spu",
+        "entity_name": "TravelSimSpu",
+        "menu_name": "仿真商品",
+        "permission_prefix": "travel:sim-spu",
+        "backend_project": {"type": "ruoyi-vue-pro-jdk17"},
+        "backend_codegen_defaults": {"base_package": "cn.iocoder.yudao"},
+        "table_schema": {"columns": []},
+        "generated_file_plan": plan,
+    }
+
+    content = render_frontend_file(
+        "src/views/travel/simSpu/index.vue",
+        plan["frontends"][0],
+        context,
+    )
+
+    assert "import SimSpuForm from './simSpuForm.vue'" in content
+    assert "<SimSpuForm ref=\"formRef\" @success=\"getList\" />" in content
+    assert "TravelSimSpuForm.vue" not in content
+
+
+def test_vue3_generated_dict_uses_dict_type_constant() -> None:
+    field = {
+        "java_field": "sourceType",
+        "column_comment": "来源类型",
+        "java_type": "Integer",
+        "ts_type": "number",
+        "html_type": "select",
+        "generated_dict_type": "sim_spu_source_type",
+    }
+
+    assert "DICT_TYPE.SIM_SPU_SOURCE_TYPE" in render_vue3_dict_options_expr(field)
+    assert render_vue3_dict_type_expr(field) == "DICT_TYPE.SIM_SPU_SOURCE_TYPE"
+    assert "'sim_spu_source_type'" not in render_vue3_dict_options_expr(field)
+
+
+def test_scaffold_includes_vue3_dict_type_constant_update_file() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[
+            {
+                "project_type": "VUE3_ELEMENT_PLUS",
+                "default_front_type": 20,
+                "default_front_type_label": "Vue3 Element Plus",
+                "ambiguous": False,
+            }
+        ],
+        unit_test_enable=False,
+    )
+    context = {
+        "table_name": "travel_sim_spu",
+        "module_name": "travel",
+        "business_name": "sim_spu",
+        "entity_name": "TravelSimSpu",
+        "menu_name": "仿真商品",
+        "permission_prefix": "travel:sim-spu",
+        "backend_project": {"type": "ruoyi-vue-pro-jdk17"},
+        "backend_codegen_defaults": {"base_package": "cn.iocoder.yudao"},
+        "table_schema": {
+            "columns": [
+                {
+                    "java_field": "sourceType",
+                    "column_comment": "来源类型",
+                    "java_type": "Integer",
+                    "ts_type": "number",
+                    "html_type": "select",
+                    "generated_dict_type": "sim_spu_source_type",
+                    "generated_dict_name": "来源类型",
+                }
+            ]
+        },
+        "generated_file_plan": plan,
+    }
+
+    files = generate_scaffold_files(context, include_backend=False)
+    dict_file = next(file for file in files if file.relative_path == "src/utils/dict.ts")
+
+    assert "SIM_SPU_SOURCE_TYPE = 'sim_spu_source_type'" in dict_file.content
+    assert "来源类型" in dict_file.content
 
 
 def test_backend_business_name_removes_underscores() -> None:
     assert normalize_backend_business_name("sim_spu") == "simspu"
     assert normalize_backend_business_name("hotel/room_type") == "hotel/roomtype"
+
+
+def test_backend_business_name_strips_module_prefix_by_default() -> None:
+    assert resolve_backend_business_name(
+        module_name="sim",
+        business_name="simspu",
+        table_name="sim_spu",
+    ) == "spu"
+    assert resolve_backend_business_name(
+        module_name="sim",
+        business_name="sim_spu",
+        table_name="sim_spu",
+        preserve_business_name=True,
+    ) == "simspu"
 
 
 def test_generated_backend_paths_use_compact_business_name() -> None:
@@ -512,6 +686,22 @@ def test_generated_backend_paths_use_compact_business_name() -> None:
     assert any("/controller/admin/simspu/" in path for path in plan["backend"])
     assert any("/dal/dataobject/simspu/" in path for path in plan["backend"])
     assert not any("/sim_spu/" in path for path in plan["backend"])
+
+
+def test_generated_backend_paths_strip_module_prefix_from_business_name() -> None:
+    plan = build_generated_file_plan(
+        table_name="sim_spu",
+        module_name="sim",
+        business_name="simspu",
+        entity_name="SimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[],
+        unit_test_enable=False,
+    )
+
+    assert plan["backend_business_name"] == "spu"
+    assert any("/controller/admin/spu/" in path for path in plan["backend"])
+    assert not any("/controller/admin/simspu/" in path for path in plan["backend"])
 
 
 def test_rendered_backend_and_frontend_use_split_business_names() -> None:
@@ -584,7 +774,7 @@ def test_generate_codegen_scaffold_uses_simple_class_name_for_vue3_form_import(
         if item["relative_path"].endswith("src/views/hotel/brand/index.vue")
     )
 
-    assert "import BrandForm from './BrandForm.vue'" in index_vue["content"]
+    assert "import BrandForm from './brandForm.vue'" in index_vue["content"]
     assert "<BrandForm ref=\"formRef\" @success=\"getList\" />" in index_vue["content"]
     assert "import HotelBrandForm from './BrandForm.vue'" not in index_vue["content"]
 
@@ -878,7 +1068,7 @@ def test_generate_codegen_scaffold_vue3_form_replaces_todo_with_upstream_style_s
     form_vue = next(
         item
         for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/views/hotel/brand/BrandForm.vue")
+        if item["relative_path"].endswith("src/views/hotel/brand/brandForm.vue")
     )
 
     assert "TODO Yudao Pilot" not in form_vue["content"]
@@ -1047,7 +1237,7 @@ def test_generate_codegen_scaffold_vue3_renders_common_field_types_with_upstream
     form_vue = next(
         item["content"]
         for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/views/hotel/brand/BrandForm.vue")
+        if item["relative_path"].endswith("src/views/hotel/brand/brandForm.vue")
     )
 
     assert "from '@/utils/dict'" in index_vue
@@ -2732,3 +2922,127 @@ def test_generated_backend_plan_uses_resolved_module_dir_and_package(tmp_path: P
 
     assert "yudao-module-travel/yudao-module-hotel-product/src/main/java/cn/iocoder/yudao/module/product/controller/admin/brand/vo/HotelBrandPageReqVO.java" in plan["backend"]
     assert "yudao-module-travel/src/main/java" not in "\n".join(plan["backend"])
+
+
+def test_explicit_backend_codegen_target_supports_nested_new_module(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    target = resolve_backend_codegen_target(
+        backend_root,
+        module_name="travel",
+        business_name="sim_spu",
+        table_name="travel_sim_spu",
+        entity_name="TravelSimSpu",
+        backend_module_dir="travel/sim-spu",
+        backend_package_module="simspu",
+    )
+
+    assert target == {
+        "module_dir_name": "yudao-module-travel/yudao-module-sim-spu",
+        "package_module_name": "simspu",
+        "matched_by": "explicit",
+    }
+
+
+def test_normalize_backend_module_dir_accepts_prefixed_and_unprefixed_paths() -> None:
+    assert normalize_backend_module_dir("A/B") == "yudao-module-a/yudao-module-b"
+    assert (
+        normalize_backend_module_dir("yudao-module-travel/yudao-module-sim-spu")
+        == "yudao-module-travel/yudao-module-sim-spu"
+    )
+
+
+def test_codegen_context_accepts_explicit_backend_module_target(
+    workspace_builder,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = workspace_builder()
+    backend_root = _create_fake_backend(tmp_path)
+    _rewrite_backend_path(workspace_root, backend_root)
+    fake_schema = {
+        "resolved": True,
+        "table_name": "merchant_user",
+        "table_comment": "商户用户",
+        "columns": [],
+    }
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    from yudao_pilot.config import load_workspace_config
+
+    context = build_codegen_context(
+        workspace_root,
+        load_workspace_config(workspace_root),
+        "merchant_user",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        backend_module_dir="travel/sim-spu",
+        backend_package_module="simspu",
+    )
+
+    target = context["backend_project"]["codegen_target"]
+    assert target["matched_by"] == "explicit"
+    assert target["module_dir_name"] == "yudao-module-travel/yudao-module-sim-spu"
+    assert target["package_module_name"] == "simspu"
+    assert context["module_name"] == "simspu"
+    assert context["configured_module_name"] == "travel"
+    assert any(
+        path.startswith(
+            "yudao-module-travel/yudao-module-sim-spu/src/main/java/cn/iocoder/yudao/module/simspu/"
+        )
+        for path in context["generated_file_plan"]["backend"]
+    )
+
+
+def test_scaffold_includes_pom_for_missing_explicit_nested_backend_module(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    _write_pom(
+        backend_root / "yudao-module-travel" / "pom.xml",
+        "yudao-module-travel",
+        packaging="pom",
+        modules=[],
+    )
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="simspu",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[],
+        unit_test_enable=False,
+        backend_target={
+            "module_dir_name": "yudao-module-travel/yudao-module-travel-sim",
+            "package_module_name": "simspu",
+            "matched_by": "explicit",
+        },
+    )
+    context = {
+        "table_name": "travel_sim_spu",
+        "module_name": "simspu",
+        "configured_module_name": "travel",
+        "business_name": "sim_spu",
+        "backend_business_name": "simspu",
+        "entity_name": "TravelSimSpu",
+        "menu_name": "商品",
+        "permission_prefix": "travel:sim-spu",
+        "backend_project": {
+            "type": "ruoyi-vue-pro-jdk17",
+            "repo_root": str(backend_root),
+            "codegen_target": plan["backend_target"],
+        },
+        "backend_codegen_defaults": {"base_package": "cn.iocoder.yudao"},
+        "table_schema": {"columns": []},
+        "generated_file_plan": plan,
+    }
+
+    files = generate_scaffold_files(context, include_frontend=False)
+    pom_file = next(
+        file
+        for file in files
+        if file.relative_path == "yudao-module-travel/yudao-module-travel-sim/pom.xml"
+    )
+
+    assert pom_file.overwrite is False
+    assert "<artifactId>yudao-module-travel</artifactId>" in pom_file.content
+    assert "<relativePath>" not in pom_file.content
+    assert "<artifactId>yudao-module-travel-sim</artifactId>" in pom_file.content

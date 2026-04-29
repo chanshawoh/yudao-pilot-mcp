@@ -293,8 +293,14 @@ def inspect_codegen_context_tool(
     menu_name: str | None = None,
     parent_menu_name: str | None = None,
     parent_menu_id: int | None = None,
+    backend_module_dir: str | None = None,
+    backend_package_module: str | None = None,
 ) -> dict[str, Any]:
-    """结合配置规则、后端默认配置和 SQL 菜单数据，构建生成代码所需上下文。"""
+    """结合配置规则、后端默认配置和 SQL 菜单数据，构建生成代码所需上下文。
+
+    backend_module_dir: 显式后端目标模块目录，支持 yudao-module-a/yudao-module-b 或 a/b。
+    backend_package_module: 显式 Java package module 名，例如 b；未传时使用 module_name。
+    """
     loaded = load_config_or_error(workspace_root)
     if isinstance(loaded, dict):
         return loaded
@@ -311,6 +317,9 @@ def inspect_codegen_context_tool(
         menu_name=menu_name,
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
+        backend_module_dir=backend_module_dir,
+        backend_package_module=backend_package_module,
+        preserve_business_name=business_name is not None,
     )
     context["workspace_root"] = str(root)
     context["resolved_from_config"] = resolution.model_dump()
@@ -356,6 +365,8 @@ def generate_codegen_scaffold_tool(
     write_files: bool = False,
     overwrite: bool = True,
     field_overrides: dict[str, str] | None = None,
+    backend_module_dir: str | None = None,
+    backend_package_module: str | None = None,
 ) -> dict[str, Any]:
     """根据当前上下文直接生成首版代码骨架，可选择只预览或直接写入工作区。
 
@@ -363,6 +374,8 @@ def generate_codegen_scaffold_tool(
     例如 {"lng": "inputNumber", "lat": "inputNumber"}。
     可用 html_type 值: input, inputNumber, textarea, editor, select, radio,
     checkbox, datetime, date, imageUpload, fileUpload。
+    backend_module_dir: 显式后端目标模块目录，支持 yudao-module-a/yudao-module-b 或 a/b。
+    backend_package_module: 显式 Java package module 名，例如 b；未传时使用 module_name。
     """
     loaded = load_config_or_error(workspace_root)
     if isinstance(loaded, dict):
@@ -380,6 +393,9 @@ def generate_codegen_scaffold_tool(
         menu_name=menu_name,
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
+        backend_module_dir=backend_module_dir,
+        backend_package_module=backend_package_module,
+        preserve_business_name=business_name is not None,
     )
     if field_overrides:
         _apply_field_overrides(context, field_overrides)
@@ -477,6 +493,8 @@ def generate_codegen_sql_tool(
     parent_menu_id: int | None = None,
     write_files: bool = False,
     overwrite: bool = False,
+    backend_module_dir: str | None = None,
+    backend_package_module: str | None = None,
 ) -> dict[str, Any]:
     """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件并执行菜单数据。
 
@@ -485,6 +503,8 @@ def generate_codegen_sql_tool(
     auto（默认）= 生成 SQL，write_files 写迁移；
     migration_only = 兼容值，同样生成 SQL 并可写迁移文件；
     disabled = 不生成对应 SQL（不写迁移中的该段）。
+    backend_module_dir: 显式后端目标模块目录，支持 yudao-module-a/yudao-module-b 或 a/b。
+    backend_package_module: 显式 Java package module 名，例如 b；未传时使用 module_name。
     """
     loaded = load_config_or_error(workspace_root)
     if isinstance(loaded, dict):
@@ -502,6 +522,9 @@ def generate_codegen_sql_tool(
         menu_name=menu_name,
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
+        backend_module_dir=backend_module_dir,
+        backend_package_module=backend_package_module,
+        preserve_business_name=business_name is not None,
     )
     result: dict[str, Any] = {
         "workspace_root": str(root),

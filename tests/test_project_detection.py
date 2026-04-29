@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from yudao_pilot.inspector import inspect_project_path
+from yudao_pilot.inspector import (
+    frontend_project_type_to_codegen_types,
+    inspect_project_path,
+)
 
 
 def _write_backend_project(path: Path) -> Path:
@@ -105,6 +108,38 @@ def test_inspect_frontend_vben_by_fingerprint(tmp_path: Path) -> None:
     assert result["exists"] is True
     assert result["best_match"]["detected_type"] == "yudao-ui-admin-vben"
     assert result["frontend"]["supported"] is True
+
+
+def test_vben_root_codegen_types_follow_existing_supported_apps(tmp_path: Path) -> None:
+    root = _write_vben_project(tmp_path / "renamed-admin")
+    (root / "apps" / "web-antd").mkdir(parents=True)
+    (root / "apps" / "web-ele").mkdir(parents=True)
+    (root / "apps" / "web-naive").mkdir(parents=True)
+    (root / "apps" / "web-tdesign").mkdir(parents=True)
+
+    assert frontend_project_type_to_codegen_types("yudao-ui-admin-vben", root) == [
+        "VUE3_VBEN5_ANTD_SCHEMA",
+        "VUE3_VBEN5_ANTD_GENERAL",
+        "VUE3_VBEN5_EP_SCHEMA",
+        "VUE3_VBEN5_EP_GENERAL",
+    ]
+
+
+def test_vben_child_app_codegen_types_are_app_local(tmp_path: Path) -> None:
+    web_ele = _write_vben_project(tmp_path / "renamed-admin" / "apps" / "web-ele")
+
+    assert frontend_project_type_to_codegen_types("yudao-ui-admin-vben", web_ele) == [
+        "VUE3_VBEN5_EP_SCHEMA",
+        "VUE3_VBEN5_EP_GENERAL",
+    ]
+
+
+def test_vben_unsupported_child_app_does_not_fallback_to_other_templates(
+    tmp_path: Path,
+) -> None:
+    web_naive = _write_vben_project(tmp_path / "renamed-admin" / "apps" / "web-naive")
+
+    assert frontend_project_type_to_codegen_types("yudao-ui-admin-vben", web_naive) == []
 
 
 def test_inspect_backend_project_with_renamed_coordinates(tmp_path: Path) -> None:

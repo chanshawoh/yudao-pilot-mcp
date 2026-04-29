@@ -125,9 +125,28 @@ def test_auto_init_workspace_config_scans_server_and_client_dirs(tmp_path: Path)
     assert raw_config["projects"]["frontend"] == [
         {"type": "VUE3_ELEMENT_PLUS", "path": "client/admin"},
         {"type": "VUE3_VBEN5_ANTD_SCHEMA", "path": "client/vben"},
+        {"type": "VUE3_VBEN5_ANTD_GENERAL", "path": "client/vben"},
         {"type": "VUE3_VBEN5_EP_SCHEMA", "path": "client/vben"},
+        {"type": "VUE3_VBEN5_EP_GENERAL", "path": "client/vben"},
     ]
     assert load_workspace_config(workspace_root).projects.backend.path == "server"
+
+
+def test_auto_init_workspace_config_detects_vben_apps_by_existing_frameworks(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    _write_backend_project(workspace_root / "server")
+    _write_vben_project(workspace_root / "client" / "vben")
+    (workspace_root / "client" / "vben" / "apps" / "web-ele").mkdir(parents=True)
+
+    config_file = auto_init_workspace_config(workspace_root)
+    raw_config = yaml.safe_load(config_file.content or "")
+
+    assert raw_config["projects"]["frontend"] == [
+        {"type": "VUE3_VBEN5_EP_SCHEMA", "path": "client/vben"},
+        {"type": "VUE3_VBEN5_EP_GENERAL", "path": "client/vben"},
+    ]
 
 
 def test_load_workspace_config_tool_auto_initializes_and_stops_for_review(tmp_path: Path) -> None:

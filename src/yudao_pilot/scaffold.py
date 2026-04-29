@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -18,6 +19,17 @@ def generate_scaffold_files(
     backend_project = context["backend_project"]
     backend_plan = context["generated_file_plan"]["backend"]
     if include_backend:
+        module_pom_path = resolve_missing_backend_module_pom_path(context)
+        if module_pom_path:
+            files.append(
+                GeneratedFile(
+                    target_kind="backend",
+                    target_type=backend_project["type"],
+                    relative_path=module_pom_path,
+                    content=render_backend_module_pom(module_pom_path, context),
+                    overwrite=False,
+                )
+            )
         for relative_path in backend_plan:
             files.append(
                 GeneratedFile(
@@ -31,6 +43,17 @@ def generate_scaffold_files(
 
     if include_frontend:
         for frontend_plan in context["generated_file_plan"]["frontends"]:
+            dict_constants_content = render_vue3_dict_constants_update(context)
+            if frontend_plan["project_type"] == "VUE3_ELEMENT_PLUS" and dict_constants_content:
+                files.append(
+                    GeneratedFile(
+                        target_kind="frontend",
+                        target_type=frontend_plan["project_type"],
+                        relative_path="src/utils/dict.ts",
+                        content=dict_constants_content,
+                        overwrite=True,
+                    )
+                )
             for relative_path in frontend_plan["relative_paths"]:
                 files.append(
                     GeneratedFile(
@@ -42,6 +65,86 @@ def generate_scaffold_files(
                     )
                 )
     return files
+
+
+def resolve_missing_backend_module_pom_path(context: dict[str, Any]) -> str | None:
+    backend_project = context.get("backend_project") or {}
+    repo_root = backend_project.get("repo_root")
+    target = backend_project.get("codegen_target") or {}
+    module_dir_name = str(target.get("module_dir_name") or "").strip().strip("/")
+    if not repo_root or not module_dir_name:
+        return None
+
+    pom_relative_path = f"{module_dir_name}/pom.xml"
+    if (Path(str(repo_root)) / pom_relative_path).exists():
+        return None
+    return pom_relative_path
+
+
+def render_backend_module_pom(relative_path: str, context: dict[str, Any]) -> str:
+    module_parts = [part for part in relative_path.split("/")[:-1] if part]
+    artifact_id = module_parts[-1] if module_parts else f"yudao-module-{context['module_name']}"
+    parent_artifact_id = module_parts[-2] if len(module_parts) > 1 else "yudao"
+    description = artifact_id.removeprefix("yudao-module-")
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<project xmlns="http://maven.apache.org/POM/4.0.0"\n'
+        '         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n'
+        '         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 '
+        'http://maven.apache.org/xsd/maven-4.0.0.xsd">\n'
+        "    <parent>\n"
+        "        <groupId>cn.iocoder.boot</groupId>\n"
+        f"        <artifactId>{parent_artifact_id}</artifactId>\n"
+        "        <version>${revision}</version>\n"
+        "    </parent>\n"
+        "    <modelVersion>4.0.0</modelVersion>\n"
+        f"    <artifactId>{artifact_id}</artifactId>\n"
+        "    <packaging>jar</packaging>\n\n"
+        "    <name>${project.artifactId}</name>\n"
+        f"    <description>{description} 模块</description>\n\n"
+        "    <dependencies>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-module-system</artifactId>\n"
+        "            <version>${revision}</version>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-module-infra</artifactId>\n"
+        "            <version>${revision}</version>\n"
+        "        </dependency>\n\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-biz-tenant</artifactId>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-security</artifactId>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>org.springframework.boot</groupId>\n"
+        "            <artifactId>spring-boot-starter-validation</artifactId>\n"
+        "        </dependency>\n\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-mybatis</artifactId>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-redis</artifactId>\n"
+        "        </dependency>\n\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-test</artifactId>\n"
+        "            <scope>test</scope>\n"
+        "        </dependency>\n"
+        "        <dependency>\n"
+        "            <groupId>cn.iocoder.boot</groupId>\n"
+        "            <artifactId>yudao-spring-boot-starter-excel</artifactId>\n"
+        "        </dependency>\n"
+        "    </dependencies>\n\n"
+        "</project>\n"
+    )
 
 
 def render_backend_file(relative_path: str, context: dict[str, Any]) -> str:
@@ -679,6 +782,7 @@ def render_vue3_index(relative_path: str, context: dict[str, Any]) -> str:
     entity_name = context["entity_name"]
     entity_label = resolve_frontend_entity_label(context)
     simple_class_name = context["generated_file_plan"]["simple_class_name"]
+    form_file_name = resolve_vue3_form_file_name(context)
     query_fields = get_frontend_query_fields(context)
     list_fields = get_frontend_list_fields(context)
     query_lines = "\n".join(render_vue3_query_item(field) for field in query_fields)
@@ -770,7 +874,7 @@ import download from '@/utils/download'
 {dict_import_line}
 {formatter_import_line}
 import {{ delete{entity_name}, export{entity_name}, get{entity_name}Page, {entity_name}VO }} from '@/api/{module_name}/{context["generated_file_plan"]["frontend_business_path"]}'
-import {simple_class_name}Form from './{simple_class_name}Form.vue'
+import {simple_class_name}Form from './{form_file_name}'
 
 const message = useMessage()
 const {{ t }} = useI18n()
@@ -2166,7 +2270,7 @@ def render_vue3_dict_options_expr(field: dict[str, Any]) -> str | None:
     if dict_type:
         return f"{method}(DICT_TYPE.{dict_type})"
     if generated_dict_type:
-        return f"{method}('{generated_dict_type}')"
+        return f"{method}({render_dict_type_constant_expr(generated_dict_type)})"
     return None
 
 
@@ -2176,8 +2280,49 @@ def render_vue3_dict_type_expr(field: dict[str, Any]) -> str | None:
     if dict_type:
         return f"DICT_TYPE.{dict_type}"
     if generated_dict_type:
-        return f"'{generated_dict_type}'"
+        return render_dict_type_constant_expr(generated_dict_type)
     return None
+
+
+def resolve_vue3_form_file_name(context: dict[str, Any]) -> str:
+    frontend_business_path = str(context["generated_file_plan"]["frontend_business_path"])
+    leaf = frontend_business_path.strip("/").split("/")[-1]
+    return f"{leaf}Form.vue"
+
+
+def render_dict_type_constant_expr(dict_type: str) -> str:
+    return f"DICT_TYPE.{normalize_dict_type_constant_name(dict_type)}"
+
+
+def normalize_dict_type_constant_name(dict_type: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", str(dict_type).upper()).strip("_")
+
+
+def render_vue3_dict_constants_update(context: dict[str, Any]) -> str:
+    constants = collect_generated_dict_constants(get_table_columns(context))
+    if not constants:
+        return ""
+    lines = ["// Yudao Pilot DICT_TYPE additions"]
+    for constant_name, dict_type, comment in constants:
+        suffix = f" // {comment}" if comment else ""
+        lines.append(f"  {constant_name} = '{dict_type}',{suffix}")
+    return "\n".join(lines) + "\n"
+
+
+def collect_generated_dict_constants(fields: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    result: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for field in fields:
+        dict_type = infer_vben_generated_dict_type(field)
+        if not dict_type:
+            continue
+        constant_name = normalize_dict_type_constant_name(dict_type)
+        if constant_name in seen:
+            continue
+        seen.add(constant_name)
+        comment = str(field.get("generated_dict_name") or field.get("column_comment") or "").strip()
+        result.append((constant_name, str(dict_type), comment))
+    return result
 
 
 def resolve_vue3_dict_method(field: dict[str, Any]) -> str:

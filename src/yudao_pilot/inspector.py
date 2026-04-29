@@ -178,7 +178,10 @@ def discover_workspace_projects(
         frontend_candidates,
         key=lambda item: (item["depth"], -item["confidence"], len(item["path"])),
     ):
-        for frontend_type in frontend_project_type_to_codegen_types(candidate["project_type"]):
+        candidate_path = root / candidate["path"]
+        for frontend_type in frontend_project_type_to_codegen_types(
+            candidate["project_type"], candidate_path
+        ):
             if frontend_type in seen_frontend_types:
                 continue
             seen_frontend_types.add(frontend_type)
@@ -328,16 +331,44 @@ def path_depth(root: Path, path: Path) -> int:
     return 0 if relative == "." else len(Path(relative).parts)
 
 
-def frontend_project_type_to_codegen_types(project_type: str) -> list[str]:
+VBEN_APP_CODEGEN_TYPES: dict[str, list[str]] = {
+    "web-antd": ["VUE3_VBEN5_ANTD_SCHEMA", "VUE3_VBEN5_ANTD_GENERAL"],
+    "web-ele": ["VUE3_VBEN5_EP_SCHEMA", "VUE3_VBEN5_EP_GENERAL"],
+}
+
+
+def frontend_project_type_to_codegen_types(
+    project_type: str, project_path: Path | None = None
+) -> list[str]:
     mapping = {
         "yudao-ui-admin-vue3": ["VUE3_ELEMENT_PLUS"],
-        "yudao-ui-admin-vben": [
-            "VUE3_VBEN5_ANTD_SCHEMA",
-            "VUE3_VBEN5_EP_SCHEMA",
-        ],
         "yudao-ui-admin-uniapp": ["VUE3_ADMIN_UNIAPP_WOT"],
     }
-    return mapping.get(project_type, [])
+    if project_type != "yudao-ui-admin-vben":
+        return mapping.get(project_type, [])
+    if project_path is not None:
+        return infer_vben_codegen_types(project_path)
+    return [
+        "VUE3_VBEN5_ANTD_SCHEMA",
+        "VUE3_VBEN5_ANTD_GENERAL",
+        "VUE3_VBEN5_EP_SCHEMA",
+        "VUE3_VBEN5_EP_GENERAL",
+    ]
+
+
+def infer_vben_codegen_types(project_path: Path) -> list[str]:
+    path = project_path.expanduser().resolve()
+    if path.name in VBEN_APP_CODEGEN_TYPES:
+        return VBEN_APP_CODEGEN_TYPES[path.name]
+    if path.parent.name == "apps" and path.name.startswith("web-"):
+        return []
+
+    app_root = path / "apps"
+    codegen_types: list[str] = []
+    for app_name in ("web-antd", "web-ele"):
+        if (app_root / app_name / "package.json").exists() or (app_root / app_name).is_dir():
+            codegen_types.extend(VBEN_APP_CODEGEN_TYPES[app_name])
+    return codegen_types or frontend_project_type_to_codegen_types("yudao-ui-admin-vben")
 
 
 def resolve_backend_repo_root(project_path: Path) -> Path:

@@ -112,6 +112,10 @@ def default_config_template() -> str:
               path: ../yudao-ui-admin-vue3
             - type: VUE3_VBEN5_ANTD_SCHEMA
               path: ../yudao-ui-admin-vben
+            - type: VUE3_VBEN5_ANTD_GENERAL
+              path: ../yudao-ui-admin-vben
+            - type: VUE3_VBEN5_EP_SCHEMA
+              path: ../yudao-ui-admin-vben
             - type: VUE3_VBEN5_EP_GENERAL
               path: ../yudao-ui-admin-vben
             - type: VUE3_ADMIN_UNIAPP_WOT
@@ -121,6 +125,8 @@ def default_config_template() -> str:
             # 2. frontend 中 type 不能重复，重复直接报错
             # 3. path 必须存在，且识别结果必须和 type 对应的真实前端项目匹配，否则报错
             # 4. 同一个 yudao-ui-admin-vben 路径可以配置多个不同枚举，分别产出 web-antd / web-ele 的代码
+            # 5. 如果 path 直接指向 apps/web-antd 或 apps/web-ele，生成路径会以该子应用为根，不再重复拼接 apps/web-*
+            # 6. 当前仅内置 web-antd 与 web-ele 代码模板；web-naive、web-tdesign、web-antdv-next 只做识别兼容，不自动生成
 
         database:
           mode: auto # auto | manual

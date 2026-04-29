@@ -49,7 +49,18 @@ def resolve_backend_codegen_target(
     business_name: str,
     table_name: str,
     entity_name: str,
+    backend_module_dir: str | None = None,
+    backend_package_module: str | None = None,
 ) -> dict[str, Any]:
+    if backend_module_dir:
+        module_dir_name = normalize_backend_module_dir(backend_module_dir)
+        package_module_name = normalize_package_module_name(backend_package_module or module_name)
+        return {
+            "module_dir_name": module_dir_name,
+            "package_module_name": package_module_name,
+            "matched_by": "explicit",
+        }
+
     module_dir_name = f"yudao-module-{module_name}"
     module_dir = backend_repo_root / module_dir_name
     target = {
@@ -106,6 +117,25 @@ def resolve_backend_codegen_target(
         "score": best_score,
         "aggregator_module_dir_name": module_dir_name,
     }
+
+
+def normalize_backend_module_dir(value: str) -> str:
+    normalized = str(value or "").replace("\\", "/").strip().strip("/")
+    parts = [part.strip() for part in normalized.split("/") if part.strip()]
+    safe_parts = [normalize_backend_module_dir_part(part) for part in parts]
+    return "/".join(part for part in safe_parts if part)
+
+
+def normalize_backend_module_dir_part(value: str) -> str:
+    normalized = normalize_snake_case(value).replace("_", "-")
+    if normalized.startswith("yudao-module-"):
+        return normalized
+    return f"yudao-module-{normalized}"
+
+
+def normalize_package_module_name(value: str) -> str:
+    normalized = normalize_snake_case(value).replace("_", "")
+    return normalized or "module"
 
 
 def candidate_keywords(
@@ -246,6 +276,9 @@ def build_codegen_context(
     menu_name: str | None = None,
     parent_menu_name: str | None = None,
     parent_menu_id: int | None = None,
+    backend_module_dir: str | None = None,
+    backend_package_module: str | None = None,
+    preserve_business_name: bool = False,
 ) -> dict[str, Any]:
     root = Path(workspace_root).expanduser().resolve()
     configured_backend_root = resolve_project_path(root, config.projects.backend.path)
@@ -261,6 +294,8 @@ def build_codegen_context(
         business_name=business_name,
         table_name=table_name,
         entity_name=entity_name,
+        backend_module_dir=backend_module_dir,
+        backend_package_module=backend_package_module,
     )
     effective_module_name = str(backend_target.get("package_module_name") or module_name)
     menu_context = resolve_menu_context(
@@ -289,6 +324,7 @@ def build_codegen_context(
         frontend_targets=frontend_targets,
         unit_test_enable=bool(backend_defaults.get("unit_test_enable")),
         backend_target=backend_target,
+        preserve_business_name=preserve_business_name,
     )
 
     return {
@@ -372,6 +408,9 @@ def resolve_frontend_codegen_targets(
         type_candidates = FRONTEND_TYPE_TO_CODEGEN_FRONT_TYPES.get(frontend.type)
 
         default_front_type = type_candidates[0] if type_candidates else None
+        relative_path_prefix = resolve_frontend_relative_path_prefix(
+            frontend_root, default_front_type
+        )
         results.append(
             {
                 "project_type": frontend.type,
@@ -380,9 +419,19 @@ def resolve_frontend_codegen_targets(
                 "default_front_type": default_front_type,
                 "default_front_type_label": CODEGEN_FRONT_TYPE_LABELS.get(default_front_type),
                 "ambiguous": len(type_candidates or []) > 1,
+                "relative_path_prefix": relative_path_prefix,
             }
         )
     return results
+
+
+def resolve_frontend_relative_path_prefix(frontend_root: Path, front_type: int | None) -> str:
+    if front_type not in {40, 41, 50, 51}:
+        return ""
+    expected_root = resolve_vben_frontend_root(front_type)
+    if frontend_root.name in {"web-antd", "web-ele"}:
+        return ""
+    return expected_root
 
 
 def infer_vben_front_types(frontend_root: Path) -> list[int]:
@@ -803,9 +852,15 @@ def build_generated_file_plan(
     frontend_targets: list[dict[str, Any]],
     unit_test_enable: bool,
     backend_target: dict[str, Any] | None = None,
+    preserve_business_name: bool = False,
 ) -> dict[str, Any]:
     simple_class_name = build_simple_class_name(module_name, entity_name)
-    backend_business_name = normalize_backend_business_name(business_name) or normalize_backend_business_name(table_name)
+    backend_business_name = resolve_backend_business_name(
+        module_name=module_name,
+        business_name=business_name,
+        table_name=table_name,
+        preserve_business_name=preserve_business_name,
+    )
     frontend_business_path = build_frontend_business_path(
         business_name=business_name,
         table_name=table_name,
@@ -831,6 +886,7 @@ def build_generated_file_plan(
                 module_name=module_name,
                 frontend_business_path=frontend_business_path,
                 simple_class_name=simple_class_name,
+                relative_path_prefix=str(frontend_target.get("relative_path_prefix") or ""),
             ),
         }
         for frontend_target in frontend_targets
@@ -947,11 +1003,17 @@ def build_frontend_file_plan(
     module_name: str,
     frontend_business_path: str,
     simple_class_name: str,
+    relative_path_prefix: str = "",
 ) -> list[str]:
+    def with_prefix(relative_path: str) -> str:
+        prefix = relative_path_prefix.strip().strip("/")
+        return f"{prefix}/{relative_path}" if prefix else relative_path
+
     if front_type == 20:
+        form_file_name = f"{frontend_business_path.split('/')[-1]}Form.vue"
         return [
             f"src/views/{module_name}/{frontend_business_path}/index.vue",
-            f"src/views/{module_name}/{frontend_business_path}/{simple_class_name}Form.vue",
+            f"src/views/{module_name}/{frontend_business_path}/{form_file_name}",
             f"src/api/{module_name}/{frontend_business_path}/index.ts",
         ]
     if front_type == 60:
@@ -963,19 +1025,17 @@ def build_frontend_file_plan(
             f"src/pages-{module_name}/{frontend_business_path}/detail/index.vue",
         ]
     if front_type in {40, 50}:
-        root = resolve_vben_frontend_root(front_type)
         return [
-            f"{root}/src/views/{module_name}/{frontend_business_path}/data.ts",
-            f"{root}/src/views/{module_name}/{frontend_business_path}/index.vue",
-            f"{root}/src/views/{module_name}/{frontend_business_path}/modules/form.vue",
-            f"{root}/src/api/{module_name}/{frontend_business_path}/index.ts",
+            with_prefix(f"src/views/{module_name}/{frontend_business_path}/data.ts"),
+            with_prefix(f"src/views/{module_name}/{frontend_business_path}/index.vue"),
+            with_prefix(f"src/views/{module_name}/{frontend_business_path}/modules/form.vue"),
+            with_prefix(f"src/api/{module_name}/{frontend_business_path}/index.ts"),
         ]
     if front_type in {41, 51}:
-        root = resolve_vben_frontend_root(front_type)
         return [
-            f"{root}/src/views/{module_name}/{frontend_business_path}/index.vue",
-            f"{root}/src/views/{module_name}/{frontend_business_path}/modules/form.vue",
-            f"{root}/src/api/{module_name}/{frontend_business_path}/index.ts",
+            with_prefix(f"src/views/{module_name}/{frontend_business_path}/index.vue"),
+            with_prefix(f"src/views/{module_name}/{frontend_business_path}/modules/form.vue"),
+            with_prefix(f"src/api/{module_name}/{frontend_business_path}/index.ts"),
         ]
     return []
 
@@ -1010,6 +1070,23 @@ def normalize_backend_business_name(value: str) -> str:
     segments = [segment for segment in str(value or "").replace("\\", "/").split("/") if segment.strip()]
     normalized_segments = [normalize_snake_case(segment).replace("_", "") for segment in segments]
     return "/".join(segment for segment in normalized_segments if segment)
+
+
+def resolve_backend_business_name(
+    *,
+    module_name: str,
+    business_name: str,
+    table_name: str,
+    preserve_business_name: bool = False,
+) -> str:
+    normalized = normalize_backend_business_name(business_name) or normalize_backend_business_name(table_name)
+    if preserve_business_name:
+        return normalized
+
+    module_prefix = normalize_backend_business_name(module_name)
+    if module_prefix and normalized.startswith(module_prefix) and len(normalized) > len(module_prefix):
+        return normalized[len(module_prefix):]
+    return normalized
 
 
 def snake_to_lower_camel(value: str) -> str:

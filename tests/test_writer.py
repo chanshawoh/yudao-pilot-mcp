@@ -57,6 +57,152 @@ def test_backend_writer_skips_when_module_does_not_exist(repo_root: Path, tmp_pa
     assert result["results"][0]["reason"] == "目标后端模块不存在，拒绝创建新的模块结构"
 
 
+def test_frontend_writer_merges_dict_type_constants(tmp_path: Path) -> None:
+    frontend_root = tmp_path / "frontend"
+    dict_file = frontend_root / "src" / "utils" / "dict.ts"
+    dict_file.parent.mkdir(parents=True)
+    dict_file.write_text(
+        """export const getDictOptions = (dictType: string) => []
+
+export enum DICT_TYPE {
+  COMMON_STATUS = 'common_status',
+}
+""",
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {"path": "backend", "type": "ruoyi-vue-pro-jdk17"},
+                "frontend": [
+                    {"type": "VUE3_ELEMENT_PLUS", "path": str(frontend_root)}
+                ],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="frontend",
+                target_type="VUE3_ELEMENT_PLUS",
+                relative_path="src/utils/dict.ts",
+                content=(
+                    "// Yudao Pilot DICT_TYPE additions\n"
+                    "  SIM_SPU_SOURCE_TYPE = 'sim_spu_source_type', // 来源类型\n"
+                ),
+            )
+        ],
+    )
+
+    content = dict_file.read_text(encoding="utf-8")
+    assert result["ok"] is True
+    assert "COMMON_STATUS = 'common_status'" in content
+    assert "SIM_SPU_SOURCE_TYPE = 'sim_spu_source_type', // 来源类型" in content
+    assert content.index("SIM_SPU_SOURCE_TYPE") < content.index("}")
+
+
+def test_frontend_writer_repairs_missing_dict_type_comma_when_merging(
+    tmp_path: Path,
+) -> None:
+    frontend_root = tmp_path / "frontend"
+    dict_file = frontend_root / "src" / "utils" / "dict.ts"
+    dict_file.parent.mkdir(parents=True)
+    dict_file.write_text(
+        """export enum DICT_TYPE {
+  MERCHANT_USER_ROLE_TYPE = 'merchant_user_role_type' // 商家员工角色类型
+  TRAVEL_SIM_SPU_CARD_TYPE = 'travel_sim_spu_card_type', // 旅游手机卡 SPU卡类型
+}
+""",
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {"path": "backend", "type": "ruoyi-vue-pro-jdk17"},
+                "frontend": [
+                    {"type": "VUE3_ELEMENT_PLUS", "path": str(frontend_root)}
+                ],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="frontend",
+                target_type="VUE3_ELEMENT_PLUS",
+                relative_path="src/utils/dict.ts",
+                content=(
+                    "// Yudao Pilot DICT_TYPE additions\n"
+                    "  TRAVEL_SIM_SPU_CARD_TYPE = 'travel_sim_spu_card_type', // 旅游手机卡 SPU卡类型\n"
+                ),
+            )
+        ],
+    )
+
+    content = dict_file.read_text(encoding="utf-8")
+    assert result["ok"] is True
+    assert (
+        "MERCHANT_USER_ROLE_TYPE = 'merchant_user_role_type', // 商家员工角色类型"
+        in content
+    )
+    assert content.count("TRAVEL_SIM_SPU_CARD_TYPE") == 1
+
+
+def test_frontend_writer_repairs_dict_type_when_frontend_files_do_not_touch_dict(
+    tmp_path: Path,
+) -> None:
+    frontend_root = tmp_path / "frontend"
+    dict_file = frontend_root / "src" / "utils" / "dict.ts"
+    dict_file.parent.mkdir(parents=True)
+    dict_file.write_text(
+        """export enum DICT_TYPE {
+  MERCHANT_USER_ROLE_TYPE = 'merchant_user_role_type' // 商家员工角色类型
+  TRAVEL_SIM_SPU_CARD_TYPE = 'travel_sim_spu_card_type', // 旅游手机卡 SPU卡类型
+}
+""",
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {"path": "backend", "type": "ruoyi-vue-pro-jdk17"},
+                "frontend": [
+                    {"type": "VUE3_ELEMENT_PLUS", "path": str(frontend_root)}
+                ],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="frontend",
+                target_type="VUE3_ELEMENT_PLUS",
+                relative_path="src/views/travel/simSpu/index.vue",
+                content="<template />\n",
+            )
+        ],
+    )
+
+    content = dict_file.read_text(encoding="utf-8")
+    assert result["ok"] is True
+    assert (
+        "MERCHANT_USER_ROLE_TYPE = 'merchant_user_role_type', // 商家员工角色类型"
+        in content
+    )
+
+
 def test_backend_writer_rejects_paths_that_escape_module(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     module_root = repo_root / "yudao-module-member"
