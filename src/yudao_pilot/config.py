@@ -14,6 +14,14 @@ CONFIG_DIR_NAME = ".yudao-pilot"
 CONFIG_FILE_NAME = "config.yaml"
 
 
+class UnsafeWorkspaceRootError(ValueError):
+    pass
+
+
+class WorkspaceProjectsNotDetectedError(ValueError):
+    pass
+
+
 class WorkspaceInfo(BaseModel):
     name: str = "my-yudao-workspace"
 
@@ -193,6 +201,20 @@ def resolve_config_path(workspace_root: str | Path) -> Path:
     return root / CONFIG_DIR_NAME / CONFIG_FILE_NAME
 
 
+def is_unsafe_workspace_root(workspace_root: str | Path) -> bool:
+    root = Path(workspace_root).expanduser().resolve()
+    return root.parent == root
+
+
+def ensure_safe_workspace_root(workspace_root: str | Path) -> Path:
+    root = Path(workspace_root).expanduser().resolve()
+    if is_unsafe_workspace_root(root):
+        raise UnsafeWorkspaceRootError(
+            f"工作区根目录不能是文件系统根目录: {root}"
+        )
+    return root
+
+
 def load_workspace_config_file(workspace_root: str | Path) -> WorkspaceConfigFile:
     config_path = resolve_config_path(workspace_root)
     if not config_path.exists():
@@ -218,7 +240,8 @@ def load_workspace_config(workspace_root: str | Path) -> WorkspaceConfig:
 def init_workspace_config(
     workspace_root: str | Path, *, overwrite: bool = False
 ) -> WorkspaceConfigFile:
-    config_path = resolve_config_path(workspace_root)
+    root = ensure_safe_workspace_root(workspace_root)
+    config_path = resolve_config_path(root)
     if config_path.exists() and not overwrite:
         return WorkspaceConfigFile(
             path=str(config_path),
@@ -238,7 +261,8 @@ def auto_init_workspace_config(
     overwrite: bool = False,
     scan_depth: int = 3,
 ) -> WorkspaceConfigFile:
-    config_path = resolve_config_path(workspace_root)
+    root = ensure_safe_workspace_root(workspace_root)
+    config_path = resolve_config_path(root)
     if config_path.exists() and not overwrite:
         return WorkspaceConfigFile(
             path=str(config_path),
@@ -246,8 +270,11 @@ def auto_init_workspace_config(
             content=config_path.read_text(encoding="utf-8"),
         )
 
-    root = Path(workspace_root).expanduser().resolve()
     discovered = discover_workspace_projects(root, max_depth=scan_depth)
+    if not discovered.get("backend") and not discovered.get("frontend"):
+        raise WorkspaceProjectsNotDetectedError(
+            f"未在工作区中识别到受支持的 yudao 后端或前端项目: {root}"
+        )
     content = render_auto_config(root, discovered)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(content, encoding="utf-8")

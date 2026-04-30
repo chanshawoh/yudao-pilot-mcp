@@ -91,16 +91,18 @@ If the current MCP client has no `yudao-pilot` server configured, add it to the 
 
 1. Treat the MCP client's current project root as the workspace root.
 2. Call `load_workspace_config` first.
-3. If the response has `error_code=config_initialized`, stop the current generation flow. Tell the user the YAML was created, list the detected backend/frontend paths from `config_summary`, and ask whether to continue or stop so they can manually review/edit `./.yudao-pilot/config.yaml`.
-4. If config exists, call `validate_workspace_projects`.
-5. For code generation, call `inspect_codegen_context` before generating files.
-6. If table schema is unresolved, stop and follow the MCP response: create/provide migration SQL or fix DB config before continuing.
-7. Preview generated output with `generate_codegen_scaffold(write_files=false)` unless the user explicitly requested direct writing.
-8. Only call write-enabled tools (`generate_codegen_scaffold(write_files=true)`, `generate_codegen_sql(write_files=true)`, `write_generated_files`, `write_mysql_migration`) when the target paths and generated content are clear.
+3. If the response has `error_code=workspace_root_required`, stop the current generation flow. Ask the user for the real project workspace directory, then retry the MCP call with that directory as `workspace_root`. Never continue with `/`, another filesystem root, or a directory where MCP detected no supported yudao projects as the workspace root.
+4. If the response has `error_code=config_initialized`, stop the current generation flow. Tell the user the YAML was created, list the detected backend/frontend paths from `config_summary`, and ask whether to continue or stop so they can manually review/edit `./.yudao-pilot/config.yaml`.
+5. If config exists, call `validate_workspace_projects`.
+6. For code generation, call `inspect_codegen_context` before generating files.
+7. If table schema is unresolved, stop and follow the MCP response: create/provide migration SQL or fix DB config before continuing.
+8. Preview generated output with `generate_codegen_scaffold(write_files=false)` unless the user explicitly requested direct writing.
+9. Only call write-enabled tools (`generate_codegen_scaffold(write_files=true)`, `generate_codegen_sql(write_files=true)`, `write_generated_files`, `write_mysql_migration`) when the target paths and generated content are clear.
 
 ## Boundaries And Safety
 
 - Respect `./.yudao-pilot/config.yaml` as the routing source of truth.
+- If MCP cannot confirm the user's project workspace directory, ask the user for it and pass it explicitly as `workspace_root`; do not initialize YAML under the filesystem root or any directory with no detected yudao backend/frontend project.
 - Do not guess backend/frontend paths by directory names alone; rely on MCP project detection and validation.
 - For aggregator Maven modules with `packaging=pom`, do not write Java code into the aggregator itself. Use the MCP-generated backend target, which may select an existing child jar module or propose a new child module path.
 - If the user explicitly says to generate into a nested backend module such as `模块 A -> B -> 新建模块`, pass an explicit backend target instead of relying on inference:
