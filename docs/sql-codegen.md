@@ -1,0 +1,143 @@
+# SQL, Menu, and Dictionary Generation / SQL、菜单与字典生成
+
+[中文](#中文) | [English](#english)
+
+## 中文
+
+Yudao Pilot MCP 可以为代码生成流程补齐 SQL 产物：
+
+- MySQL 菜单迁移 SQL
+- 根据字段注释解析出的字典 SQL
+- 后端模块 H2 `create_tables.sql`
+- 后端模块 H2 `clean.sql`
+- 可选的真实数据库菜单和字典写入
+
+### 配置开关
+
+| 配置 | SQL 生成行为 | 数据库执行行为 |
+| --- | --- | --- |
+| `apply_to_database=false` | 仍生成菜单/字典迁移 SQL | 不写库 |
+| `apply_to_database=true` | 不影响 SQL 生成 | 可写库，已存在则跳过 |
+| `menu_sql_mode=disabled` | 不生成菜单 SQL 片段 | 无菜单 SQL 可写 |
+| `dict_sql_mode=disabled` | 不生成字典 SQL 片段 | 无字典 SQL 可写 |
+| `menu_sql_mode=auto` | 生成菜单 SQL | 是否写库取决于 `apply_to_database` |
+| `dict_sql_mode=auto` | 生成字典 SQL | 是否写库取决于 `apply_to_database` |
+
+`migration_only` 是兼容值，当前行为等同 `auto`：生成迁移 SQL，但是否写库仍只看 `apply_to_database`。
+
+### 常用参数
+
+`generate_codegen_sql` 常用参数：
+
+- `table_name`: 目标表名
+- `menu_name`: 业务菜单中文名，例如 `商家用户`
+- `module_menu_name`: 模块根菜单中文名，例如 `会员中心`
+- `menu_icon`: 业务菜单图标，使用 Iconify 字符串
+- `module_menu_icon`: 模块根菜单图标，使用 Iconify 字符串
+- `write_files`: 是否真实写入 SQL 文件
+
+### 菜单图标
+
+菜单图标写入后端 `system_menu.icon` 字段，前端直接消费该字符串。
+
+推荐使用 Iconify 格式：
+
+- `ep:shop`
+- `ep:avatar`
+- `ep:menu`
+- `lucide:user`
+- `ant-design:message-filled`
+
+优先级：
+
+1. AI 显式传入图标
+2. MCP 从已有菜单和业务关键词推断
+3. MCP 使用模块默认图标
+
+### 字典 SQL
+
+当表字段注释能解析出枚举语义时，MCP 会生成：
+
+- `system_dict_type`
+- `system_dict_data`
+
+字典 SQL 是幂等生成的，适合放入迁移文件。若 `dict_sql_mode=disabled`，迁移文件不包含字典片段。
+
+### H2 测试 SQL
+
+MCP 会定位目标后端模块，并幂等合并：
+
+- `src/test/resources/sql/create_tables.sql`
+- `src/test/resources/sql/clean.sql`
+
+H2 测试 SQL 不受 `menu_sql_mode` 和 `dict_sql_mode` 影响。
+
+## English
+
+Yudao Pilot MCP can generate SQL artifacts for the code-generation flow:
+
+- MySQL menu migration SQL
+- Dictionary SQL parsed from field comments
+- Backend module H2 `create_tables.sql`
+- Backend module H2 `clean.sql`
+- Optional menu and dictionary writes to a real database
+
+### Config Switches
+
+| Config | SQL generation | Database execution |
+| --- | --- | --- |
+| `apply_to_database=false` | Still generates menu/dictionary migration SQL | Does not write to DB |
+| `apply_to_database=true` | Does not affect SQL generation | May write to DB, skips existing records |
+| `menu_sql_mode=disabled` | Omits menu SQL | No menu SQL to apply |
+| `dict_sql_mode=disabled` | Omits dictionary SQL | No dictionary SQL to apply |
+| `menu_sql_mode=auto` | Generates menu SQL | DB write depends on `apply_to_database` |
+| `dict_sql_mode=auto` | Generates dictionary SQL | DB write depends on `apply_to_database` |
+
+`migration_only` is a compatibility value and currently behaves like `auto` for generation. Database execution is still controlled by `apply_to_database`.
+
+### Common Parameters
+
+Common `generate_codegen_sql` parameters:
+
+- `table_name`: Target table name
+- `menu_name`: Business menu display name
+- `module_menu_name`: Root module menu display name
+- `menu_icon`: Business menu icon as an Iconify string
+- `module_menu_icon`: Module menu icon as an Iconify string
+- `write_files`: Whether SQL files should be written
+
+### Menu Icons
+
+Menu icons are written to the backend `system_menu.icon` field and consumed by the frontend.
+
+Use Iconify strings such as:
+
+- `ep:shop`
+- `ep:avatar`
+- `ep:menu`
+- `lucide:user`
+- `ant-design:message-filled`
+
+Priority:
+
+1. Explicit icon from the AI client
+2. MCP inference from existing menus and business keywords
+3. MCP module default icon
+
+### Dictionary SQL
+
+When field comments can be parsed as enum semantics, MCP generates:
+
+- `system_dict_type`
+- `system_dict_data`
+
+Dictionary SQL is generated idempotently and is suitable for migration files. If `dict_sql_mode=disabled`, dictionary SQL is omitted.
+
+### H2 Test SQL
+
+MCP locates the target backend module and idempotently merges:
+
+- `src/test/resources/sql/create_tables.sql`
+- `src/test/resources/sql/clean.sql`
+
+H2 test SQL is not affected by `menu_sql_mode` or `dict_sql_mode`.
