@@ -14,7 +14,7 @@
 
 - 基于 stdio 的 MCP 服务
 - 加载并校验 `./.yudao-pilot/config.yaml`
-- 配置缺失时返回初始化模板
+- 配置缺失时在安全工作区内初始化配置，并在不可信目录返回结构化停止响应
 - 校验 1 个后端项目和多个不重复前端类型
 - 对不支持的项目结构返回结构化错误
 
@@ -113,3 +113,87 @@
 - 完成打包与发布
 - 补齐编辑器集成文档
 - 评估更高级的商业化工作流能力
+
+---
+
+# Roadmap
+
+## Strategy
+
+The roadmap starts with the smallest workflow that is still valuable: recognize the workspace, load configuration, resolve database context, infer generation targets, and write results safely.
+
+## Phase 1: Workspace MVP
+
+Goal: make the MCP service understand a yudao-pilot workspace.
+
+Deliverables:
+
+- stdio-based MCP server
+- `.yudao-pilot/config.yaml` loading and validation
+- safe config initialization when the workspace can be trusted
+- one backend project and multiple unique frontend targets
+- structured errors for unsupported or unclear project structures
+
+Success criteria:
+
+- An AI client can quickly know whether the current directory is a valid Yudao Pilot workspace
+- Users only need to provide information when configuration is missing, invalid, or unsafe to infer
+
+## Phase 2: Database Resolution
+
+Goal: make backend local database configuration stable and predictable.
+
+Deliverables:
+
+- `database.mode = manual | auto`
+- backend local config resolution based on `projects.backend.config_profile`
+- fallback from empty workspace config fields to backend local config
+
+Success criteria:
+
+- AI clients do not need to repeatedly ask users for database connection details
+
+## Phase 3: Generation Routing
+
+Goal: turn a table name into a deterministic generation plan.
+
+Deliverables:
+
+- manual routing based on `module`, `table_prefixes`, and `table_rules`
+- exact table matching
+- longest-prefix fallback matching
+- structured plans for backend and frontend targets
+
+Success criteria:
+
+- Given a table name, MCP can return module, business name, entity name, and target projects without ambiguity
+
+## Phase 4: Safe Writing
+
+Goal: let AI clients write generated results safely.
+
+Deliverables:
+
+- generated-file write API
+- strict target path validation
+- explicit overwrite policy
+- structured write results
+
+Success criteria:
+
+- AI clients can generate code externally and rely on Yudao Pilot for accurate placement
+
+## Phase 5: Distribution and Integrations
+
+Goal: lower adoption cost.
+
+Deliverables:
+
+- package metadata
+- `yudao-pilot` command
+- distribution channel
+- Cursor, VS Code, Trae, and other MCP client docs
+
+Success criteria:
+
+- Developers can install Yudao Pilot globally and connect it to AI clients quickly

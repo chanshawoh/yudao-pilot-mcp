@@ -92,3 +92,82 @@
 - 只有配置中的前端项目才会参与生成
 - 文件已存在且 `overwrite=false` 时，跳过该文件
 - 生成计划与真实落盘都按前端项目类型分别执行
+
+---
+
+# Frontend Output Matrix
+
+This document explains how Yudao Pilot generates frontend artifacts when multiple frontend projects are configured in one workspace.
+
+## Goal
+
+When `.yudao-pilot/config.yaml` contains multiple frontend targets:
+
+- MCP generates artifacts for every configured frontend type
+- It does not silently choose only one frontend template
+- Each artifact is written to the project path configured for its frontend type
+- A single `yudao-ui-admin-vben` path can be reused for different enum values, so `web-antd` and `web-ele` can both be generated
+
+## Supported Frontend Types
+
+- `VUE3_ELEMENT_PLUS`
+- `VUE3_VBEN5_ANTD_SCHEMA`
+- `VUE3_VBEN5_ANTD_GENERAL`
+- `VUE3_VBEN5_EP_SCHEMA`
+- `VUE3_VBEN5_EP_GENERAL`
+- `VUE3_ADMIN_UNIAPP_WOT`
+
+## Vue3 Admin
+
+Target type: `VUE3_ELEMENT_PLUS`
+
+Generated artifacts:
+
+- `src/views/{module}/{business}/index.vue`
+- `src/views/{module}/{business}/{SimpleClassName}Form.vue`
+- `src/api/{module}/{business}/index.ts`
+
+## Vben Admin
+
+Target types:
+
+- `VUE3_VBEN5_ANTD_SCHEMA`
+- `VUE3_VBEN5_ANTD_GENERAL`
+- `VUE3_VBEN5_EP_SCHEMA`
+- `VUE3_VBEN5_EP_GENERAL`
+
+Path mapping:
+
+- `VUE3_VBEN5_ANTD_SCHEMA` and `VUE3_VBEN5_ANTD_GENERAL` map to `apps/web-antd`
+- `VUE3_VBEN5_EP_SCHEMA` and `VUE3_VBEN5_EP_GENERAL` map to `apps/web-ele`
+
+Generated artifacts:
+
+- `apps/web-antd/src/views/{module}/{business}/data.ts`
+- `apps/web-antd/src/views/{module}/{business}/index.vue`
+- `apps/web-antd/src/views/{module}/{business}/modules/form.vue`
+- `apps/web-antd/src/api/{module}/{business}/index.ts`
+- `apps/web-ele/src/views/{module}/{business}/data.ts`
+- `apps/web-ele/src/views/{module}/{business}/index.vue`
+- `apps/web-ele/src/views/{module}/{business}/modules/form.vue`
+- `apps/web-ele/src/api/{module}/{business}/index.ts`
+
+## Uniapp Admin
+
+Target type: `VUE3_ADMIN_UNIAPP_WOT`
+
+Generated artifacts:
+
+- `src/api/{module}/{business}/index.ts`
+- `src/pages-{module}/{business}/index.vue`
+- `src/pages-{module}/{business}/components/search-form.vue`
+- `src/pages-{module}/{business}/form/index.vue`
+- `src/pages-{module}/{business}/detail/index.vue`
+
+## Write Constraints
+
+- `projects.frontend[].type` must be unique
+- The same `path` may appear more than once only when each entry uses a different frontend enum
+- Only configured frontend projects participate in generation
+- Existing files are skipped when `overwrite=false`
+- Planning and writing are both executed per frontend type
