@@ -38,8 +38,7 @@
       ],
       "outputs": [
         "src/yudao_pilot/server.py",
-        "src/yudao_pilot/models.py",
-        ".ai/bootstrap.md"
+        "src/yudao_pilot/models.py"
       ],
       "notes": "已确定使用 Python + FastMCP + Stdio + MySQL，并以 ruoyi-vue-pro-jdk17 作为首版主要参考实现。"
     },
@@ -201,11 +200,9 @@
         "yudao-projects/yudao-ui-admin-vue3/src/api/hotel/brand/index.ts",
         "yudao-projects/yudao-ui-admin-vben/apps/web-antd/src/api/hotel/brand/index.ts",
         "yudao-projects/yudao-ui-admin-vben/apps/web-ele/src/api/hotel/brand/index.ts",
-        ".ai/bootstrap.md",
-        ".ai/dev-standards.md",
         "README.md"
       ],
-      "notes": "已完成：1) 重新编译并用最新 yudao-server.jar 启动本地后端；2) 修复 hotel_brand 在前端 API 仍按 table_name 生成旧路由的问题，统一改为按 business_name 生成 /hotel/brand 与 /admin-api/hotel/brand；3) 增加回归测试，覆盖 Controller 路由与前端 API 路由生成；4) 将本地联调启动约定补充到 `.ai/bootstrap.md`、`.ai/dev-standards.md` 与 `README.md`，明确后端默认 `mvn package` 后 `java -jar`，前端优先使用 `pnpm`；5) 按约定完成一次联调验证：`mvn -pl yudao-server -am package` 构建成功，后端以 `java -jar yudao-server/target/yudao-server.jar --spring.profiles.active=local` 启动成功，前端按用户要求以 `pnpm dev` 启动成功。补充说明：本轮联调依赖用户手动启动本机 Redis。待收口：本地联调环境中的文件上传能力由后端文件存储主配置决定，当前先通过人工配置解决，不在本任务内自动改库。"
+      "notes": "已完成：1) 重新编译并用最新 yudao-server.jar 启动本地后端；2) 修复 hotel_brand 在前端 API 仍按 table_name 生成旧路由的问题，统一改为按 business_name 生成 /hotel/brand 与 /admin-api/hotel/brand；3) 增加回归测试，覆盖 Controller 路由与前端 API 路由生成；4) 将本地联调启动约定补充到 `README.md`，明确后端默认 `mvn package` 后 `java -jar`，前端优先使用 `pnpm`；5) 按约定完成一次联调验证：`mvn -pl yudao-server -am package` 构建成功，后端以 `java -jar yudao-server/target/yudao-server.jar --spring.profiles.active=local` 启动成功，前端按用户要求以 `pnpm dev` 启动成功。补充说明：本轮联调依赖用户手动启动本机 Redis。待收口：本地联调环境中的文件上传能力由后端文件存储主配置决定，当前先通过人工配置解决，不在本任务内自动改库。"
     }
   ],
   "task_statuses": {
@@ -251,8 +248,6 @@
   },
   "artifacts": [
     "README.md",
-    ".ai/bootstrap.md",
-    ".ai/dev-standards.md",
     "docs/product.md",
     "docs/roadmap.md",
     "docs/frontend-output-matrix.md",

@@ -356,11 +356,6 @@ AI 应用负责：
 
 ```text
 yudao-pilot-mcp/
-├── .ai/
-│   ├── agent.md
-│   ├── ai-integration.md
-│   ├── bootstrap.md
-│   └── dev-standards.md
 ├── README.md
 ├── docs/
 │   ├── product.md
@@ -377,8 +372,6 @@ yudao-pilot-mcp/
 
 ## 相关文档
 
-- Agent 主协议：[.ai/agent.md](.ai/agent.md)
-- AI 应用接入协议：[.ai/ai-integration.md](.ai/ai-integration.md)
 - 产品与商业说明：[docs/product.md](docs/product.md)
 - 路线图文档：[docs/roadmap.md](docs/roadmap.md)
 
