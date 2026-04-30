@@ -15,9 +15,11 @@ from .codegen import (
     write_mysql_migration,
 )
 from .config import (
+    UnsafeWorkspaceRootError,
     WorkspaceConfig,
+    WorkspaceProjectsNotDetectedError,
     auto_init_workspace_config,
-    init_workspace_config,
+    is_unsafe_workspace_root,
     load_workspace_config,
     load_workspace_config_file,
 )
@@ -36,6 +38,13 @@ mcp = FastMCP("Yudao Pilot")
 
 def get_workspace_root(workspace_root: str | None = None) -> Path:
     return Path(workspace_root).expanduser().resolve() if workspace_root else Path.cwd().resolve()
+
+
+def get_safe_workspace_root_or_error(workspace_root: str | None = None) -> Path | dict[str, Any]:
+    root = get_workspace_root(workspace_root)
+    if is_unsafe_workspace_root(root):
+        return workspace_root_required_response(root, explicit=workspace_root is not None)
+    return root
 
 
 def load_validated_config(workspace_root: str | None = None) -> tuple[Path, WorkspaceConfig]:
@@ -66,6 +75,48 @@ def error_response(
         "message": message,
         "data": data or {},
     }
+
+
+def workspace_root_required_response(root: Path, *, explicit: bool) -> dict[str, Any]:
+    if explicit:
+        message = "workspace_root 指向文件系统根目录，已停止初始化 ./.yudao-pilot/config.yaml。"
+        prompt = (
+            "用户传入的 workspace_root 是文件系统根目录，不能在这里初始化配置。"
+            "请询问用户真实的项目工作目录绝对路径，并使用该路径作为 workspace_root 参数重新调用 MCP 工具。"
+        )
+    else:
+        message = "无法确认用户项目工作目录，已停止初始化 ./.yudao-pilot/config.yaml。"
+        prompt = (
+            "当前 MCP 服务的进程工作目录是文件系统根目录，不能据此判断用户项目位置。"
+            "请先询问用户真实的项目工作目录绝对路径，然后把该路径作为 workspace_root 参数重新调用 MCP 工具。"
+        )
+    return error_response(
+        "workspace_root_required",
+        message,
+        {
+            "workspace_root": str(root),
+            "initialized": False,
+            "should_stop": True,
+            "next_action_prompt": prompt,
+        },
+    )
+
+
+def workspace_projects_not_detected_response(root: Path) -> dict[str, Any]:
+    return error_response(
+        "workspace_root_required",
+        "未在当前目录识别到受支持的 yudao 后端或前端项目，已停止初始化 ./.yudao-pilot/config.yaml。",
+        {
+            "workspace_root": str(root),
+            "initialized": False,
+            "should_stop": True,
+            "detected_projects": {"backend": None, "frontend": []},
+            "next_action_prompt": (
+                "当前目录下没有识别到受支持的 yudao 后端或前端项目，不能确认这是用户项目工作区。"
+                "请询问用户真实的项目工作目录绝对路径，并使用该路径作为 workspace_root 参数重新调用 MCP 工具。"
+            ),
+        },
+    )
 
 
 def stop_response_from_schema(
@@ -111,7 +162,10 @@ def _describe_sql_apply_skip(
 def load_config_or_error(
     workspace_root: str | None = None,
 ) -> tuple[Path, WorkspaceConfig] | dict[str, Any]:
-    root = get_workspace_root(workspace_root)
+    root_or_error = get_safe_workspace_root_or_error(workspace_root)
+    if isinstance(root_or_error, dict):
+        return root_or_error
+    root = root_or_error
     config_file = load_workspace_config_file(root)
     if not config_file.exists:
         return initialize_config_response(root)
@@ -133,7 +187,12 @@ def load_config_or_error(
 
 
 def initialize_config_response(root: Path) -> dict[str, Any]:
-    config_file = auto_init_workspace_config(root)
+    try:
+        config_file = auto_init_workspace_config(root)
+    except UnsafeWorkspaceRootError:
+        return workspace_root_required_response(root, explicit=True)
+    except WorkspaceProjectsNotDetectedError:
+        return workspace_projects_not_detected_response(root)
     detected_projects = discover_workspace_projects(root)
     config_summary = summarize_initialized_config(config_file)
     return error_response(
@@ -176,7 +235,10 @@ def summarize_initialized_config(config_file: Any) -> dict[str, Any]:
 @mcp.tool
 def load_workspace_config_tool(workspace_root: str | None = None) -> dict[str, Any]:
     """加载当前工作区配置；如果配置文件不存在，则返回初始化模板。"""
-    root = get_workspace_root(workspace_root)
+    root_or_error = get_safe_workspace_root_or_error(workspace_root)
+    if isinstance(root_or_error, dict):
+        return root_or_error
+    root = root_or_error
     config_file = load_workspace_config_file(root)
     if not config_file.exists:
         return initialize_config_response(root)
@@ -194,8 +256,16 @@ def init_workspace_config_tool(
     workspace_root: str | None = None, overwrite: bool = False
 ) -> dict[str, Any]:
     """初始化当前工作区配置文件。"""
-    root = get_workspace_root(workspace_root)
-    config_file = auto_init_workspace_config(root, overwrite=overwrite)
+    root_or_error = get_safe_workspace_root_or_error(workspace_root)
+    if isinstance(root_or_error, dict):
+        return root_or_error
+    root = root_or_error
+    try:
+        config_file = auto_init_workspace_config(root, overwrite=overwrite)
+    except UnsafeWorkspaceRootError:
+        return workspace_root_required_response(root, explicit=workspace_root is not None)
+    except WorkspaceProjectsNotDetectedError:
+        return workspace_projects_not_detected_response(root)
     return success_response(
         "工作区配置模板已生成",
         {
