@@ -77,6 +77,7 @@ def inspect_table_schema(
             apply_result = apply_migration_sqls_to_database(
                 normalized_db_config,
                 migration_sqls,
+                table_name=table_name,
             )
             try:
                 runtime_schema = parse_table_schema_from_database(normalized_db_config, table_name)
@@ -299,6 +300,8 @@ def format_migration_sqls(migration_sqls: list[Path]) -> str:
 def apply_migration_sqls_to_database(
     database_config: DatabaseConfig,
     migration_sqls: list[Path],
+    *,
+    table_name: str,
 ) -> dict[str, Any]:
     pymysql = import_pymysql()
     connection = pymysql.connect(
@@ -316,7 +319,7 @@ def apply_migration_sqls_to_database(
         with connection.cursor() as cursor:
             for migration_path in migration_sqls:
                 sql_text = migration_path.read_text(encoding="utf-8")
-                for statement in split_sql_statements(sql_text):
+                for statement in filter_migration_statements_for_table(sql_text, table_name):
                     cursor.execute(statement)
                     statement_count += 1
         connection.commit()
@@ -330,6 +333,28 @@ def apply_migration_sqls_to_database(
         "executed_migration_sqls": [str(path) for path in migration_sqls],
         "statement_count": statement_count,
     }
+
+
+def filter_migration_statements_for_table(sql_text: str, table_name: str) -> list[str]:
+    """Return only DDL statements needed to create or adjust the requested table."""
+    return [
+        statement
+        for statement in split_sql_statements(sql_text)
+        if is_table_scoped_ddl(statement, table_name)
+    ]
+
+
+def is_table_scoped_ddl(statement: str, table_name: str) -> bool:
+    normalized = statement.strip()
+    if not normalized:
+        return False
+    table_pattern = re.escape(table_name)
+    patterns = [
+        rf"^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"]?{table_pattern}[`\"]?\s*\(",
+        rf"^ALTER\s+TABLE\s+[`\"]?{table_pattern}[`\"]?\b",
+        rf"^CREATE\s+(?:UNIQUE\s+)?INDEX\s+[`\"]?[^`\"\s]+[`\"]?\s+ON\s+[`\"]?{table_pattern}[`\"]?\b",
+    ]
+    return any(re.search(pattern, normalized, re.IGNORECASE | re.MULTILINE) for pattern in patterns)
 
 
 def split_sql_statements(sql_text: str) -> list[str]:

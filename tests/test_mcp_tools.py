@@ -200,6 +200,11 @@ def test_inspect_table_schema_tool_applies_migration_sql_and_reports_execution(
             migration_filename: dedent(
                 """\
                 -- create missing table
+                CREATE TABLE `unrelated_table` (
+                  `id` bigint NOT NULL,
+                  PRIMARY KEY (`id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='不相关表';
+
                 CREATE TABLE `missing_table` (
                   `id` bigint NOT NULL,
                   PRIMARY KEY (`id`)
@@ -298,9 +303,11 @@ def test_inspect_table_schema_tool_applies_migration_sql_and_reports_execution(
     assert fake_connection.committed is True
     assert fake_connection.rolled_back is False
     assert any("CREATE TABLE `missing_table`" in sql for sql in executed_sql)
+    assert not any("CREATE TABLE `unrelated_table`" in sql for sql in executed_sql)
     assert result["data"]["executed_migration_sqls"] == [
         str(backend_root / "sql" / "mysql" / "migrations" / migration_filename)
     ]
+    assert result["data"]["migration_sync"]["statement_count"] == 1
     assert migration_filename in result["data"]["message"]
 
 
@@ -377,6 +384,22 @@ def test_generate_codegen_scaffold_outputs_all_configured_frontends(workspace_bu
     assert summary["VUE3_ELEMENT_PLUS"] == 3
     assert summary["VUE3_VBEN5_ANTD_SCHEMA"] == 4
     assert summary["VUE3_ADMIN_UNIAPP_WOT"] == 5
+    assert result["data"]["generation_summary"]["by_kind"]["frontend"] == 12
+
+
+def test_generate_codegen_scaffold_warns_when_frontend_is_disabled(workspace_builder) -> None:
+    workspace_root = workspace_builder(frontend_types=("VUE3_ELEMENT_PLUS",))
+    result = generate_codegen_scaffold_tool(
+        "merchant",
+        str(workspace_root),
+        include_frontend=False,
+    )
+
+    assert result["ok"] is True
+    summary = result["data"]["generation_summary"]
+    assert summary["include_frontend"] is False
+    assert summary["by_kind"].get("frontend", 0) == 0
+    assert summary["warnings"] == ["include_frontend=false，已跳过配置中的前端代码生成"]
 
 
 def test_generate_codegen_scaffold_supports_all_vben_variants(workspace_builder) -> None:
@@ -861,7 +884,7 @@ def test_generate_codegen_scaffold_adds_controller_permissions_and_swagger_annot
         item
         for item in result["data"]["generated_files"]
         if item["relative_path"].endswith(
-            "controller/admin/tourism_location/SystemTourismLocationController.java"
+            "controller/admin/tourismlocation/SystemTourismLocationController.java"
         )
     )
 
@@ -970,7 +993,7 @@ def test_generate_codegen_scaffold_normalizes_vue3_api_file_indentation(
     vue3_api = next(
         item
         for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/api/system/tourism_location/index.ts")
+        if item["relative_path"].endswith("src/api/system/tourismLocation/index.ts")
         and item["target_type"] == "VUE3_ELEMENT_PLUS"
     )
 

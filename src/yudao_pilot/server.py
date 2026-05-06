@@ -79,15 +79,15 @@ def error_response(
 
 def workspace_root_required_response(root: Path, *, explicit: bool) -> dict[str, Any]:
     if explicit:
-        message = "workspace_root 指向文件系统根目录，已停止初始化 ./.yudao-pilot/config.yaml。"
+        message = "workspace_root 指向过宽目录，已停止初始化 ./.yudao-pilot/config.yaml。"
         prompt = (
-            "用户传入的 workspace_root 是文件系统根目录，不能在这里初始化配置。"
+            "用户传入的 workspace_root 是文件系统根目录或用户 Home 目录，不能在这里初始化配置。"
             "请询问用户真实的项目工作目录绝对路径，并使用该路径作为 workspace_root 参数重新调用 MCP 工具。"
         )
     else:
         message = "无法确认用户项目工作目录，已停止初始化 ./.yudao-pilot/config.yaml。"
         prompt = (
-            "当前 MCP 服务的进程工作目录是文件系统根目录，不能据此判断用户项目位置。"
+            "当前 MCP 服务的进程工作目录是文件系统根目录或用户 Home 目录，不能据此判断用户项目位置。"
             "请先询问用户真实的项目工作目录绝对路径，然后把该路径作为 workspace_root 参数重新调用 MCP 工具。"
         )
     return error_response(
@@ -486,6 +486,12 @@ def generate_codegen_scaffold_tool(
         include_frontend=include_frontend,
     )
     result["generated_files"] = [file.model_dump() for file in generated_files]
+    result["generation_summary"] = summarize_generated_files(
+        generated_files,
+        config,
+        include_backend=include_backend,
+        include_frontend=include_frontend,
+    )
     if write_files:
         write_result = write_generated_files(root, config, generated_files)
         write_result["workspace_root"] = str(root)
@@ -494,6 +500,37 @@ def generate_codegen_scaffold_tool(
             return success_response("代码骨架已生成并写入工作区", result)
         return error_response("generate_codegen_scaffold_failed", "代码骨架生成成功，但写入存在失败项", result)
     return success_response("代码骨架生成成功", result)
+
+
+def summarize_generated_files(
+    generated_files: list[GeneratedFile],
+    config: WorkspaceConfig,
+    *,
+    include_backend: bool,
+    include_frontend: bool,
+) -> dict[str, Any]:
+    by_kind: dict[str, int] = {}
+    by_target_type: dict[str, int] = {}
+    warnings: list[str] = []
+    for generated_file in generated_files:
+        by_kind[generated_file.target_kind] = by_kind.get(generated_file.target_kind, 0) + 1
+        by_target_type[generated_file.target_type] = by_target_type.get(generated_file.target_type, 0) + 1
+
+    configured_frontends = [frontend.type for frontend in config.projects.frontend]
+    if configured_frontends and not include_frontend:
+        warnings.append("include_frontend=false，已跳过配置中的前端代码生成")
+    if include_frontend and configured_frontends and by_kind.get("frontend", 0) == 0:
+        warnings.append("已请求前端代码生成，但未产生前端文件，请检查前端项目配置")
+
+    return {
+        "total": len(generated_files),
+        "by_kind": by_kind,
+        "by_target_type": by_target_type,
+        "include_backend": include_backend,
+        "include_frontend": include_frontend,
+        "configured_frontends": configured_frontends,
+        "warnings": warnings,
+    }
 
 
 @mcp.tool

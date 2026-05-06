@@ -191,6 +191,11 @@ def test_auto_init_workspace_config_rejects_filesystem_root() -> None:
         auto_init_workspace_config(Path("/"))
 
 
+def test_auto_init_workspace_config_rejects_home_directory() -> None:
+    with pytest.raises(UnsafeWorkspaceRootError):
+        auto_init_workspace_config(Path.home())
+
+
 def test_auto_init_workspace_config_rejects_empty_workspace(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -209,6 +214,16 @@ def test_load_workspace_config_tool_asks_for_workspace_when_root_is_explicit() -
     assert result["data"]["initialized"] is False
     assert result["data"]["should_stop"] is True
     assert "真实的项目工作目录" in result["data"]["next_action_prompt"]
+
+
+def test_load_workspace_config_tool_asks_for_workspace_when_home_is_explicit() -> None:
+    result = load_workspace_config_tool(str(Path.home()))
+
+    assert result["ok"] is False
+    assert result["error_code"] == "workspace_root_required"
+    assert result["data"]["initialized"] is False
+    assert result["data"]["should_stop"] is True
+    assert "Home 目录" in result["data"]["next_action_prompt"]
 
 
 def test_init_workspace_config_tool_asks_when_implicit_cwd_is_root(

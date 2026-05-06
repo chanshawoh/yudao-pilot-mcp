@@ -203,14 +203,15 @@ def resolve_config_path(workspace_root: str | Path) -> Path:
 
 def is_unsafe_workspace_root(workspace_root: str | Path) -> bool:
     root = Path(workspace_root).expanduser().resolve()
-    return root.parent == root
+    home = Path.home().resolve()
+    return root.parent == root or root == home
 
 
 def ensure_safe_workspace_root(workspace_root: str | Path) -> Path:
     root = Path(workspace_root).expanduser().resolve()
     if is_unsafe_workspace_root(root):
         raise UnsafeWorkspaceRootError(
-            f"工作区根目录不能是文件系统根目录: {root}"
+            f"工作区根目录不能是文件系统根目录或用户 Home 目录: {root}"
         )
     return root
 
