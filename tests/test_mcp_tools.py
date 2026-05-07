@@ -2478,6 +2478,93 @@ def test_generate_codegen_sql_tool_names_missing_root_menu_from_business(
     assert "'自定义演示'" in result["data"]["sql_bundle"]["mysql"]["content"]
 
 
+def test_generate_codegen_sql_tool_uses_domain_names_for_travel_sim_sku(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder(
+        manual_rules_yaml="""
+- module: travel
+  table_prefixes:
+    - travel_sim
+  table_rules:
+    - table: travel_sim_sku
+      business: sim_sku
+      entity: TravelSimSku
+""".strip()
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "travel_sim_sku",
+        "table_comment": "旅游手机卡 SKU",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+            {
+                "column_name": "card_type",
+                "column_comment": "卡类型（1-实物SIM卡，2-eSIM/流量包）",
+                "sql_type": "tinyint",
+                "raw_type": "tinyint",
+                "java_field": "cardType",
+                "java_type": "Integer",
+                "ts_type": "number",
+                "html_type": "select",
+                "nullable": False,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool("travel_sim_sku", str(workspace_root))
+
+    assert result["ok"] is True
+    menu_plan = result["data"]["sql_bundle"]["menu_plan"]
+    assert menu_plan["root_menu"]["name"] == "旅游管理"
+    assert menu_plan["business_menu"]["name"] == "手机卡 SKU管理"
+    assert [button["name"] for button in menu_plan["buttons"]] == [
+        "手机卡 SKU查询",
+        "手机卡 SKU创建",
+        "手机卡 SKU更新",
+        "手机卡 SKU删除",
+        "手机卡 SKU导出",
+    ]
+    dict_plan = result["data"]["sql_bundle"]["dict_plan"]
+    assert dict_plan["dict_types"][0]["dict_name"] == "旅游手机卡 SKU卡类型"
+    sql = result["data"]["sql_bundle"]["mysql"]["content"]
+    assert "'旅游管理'" in sql
+    assert "'手机卡 SKU管理'" in sql
+    assert "'旅游手机卡 SKU卡类型'" in sql
+
+
 def test_generate_codegen_sql_tool_supports_explicit_menu_icon_override(
     workspace_builder, monkeypatch
 ) -> None:

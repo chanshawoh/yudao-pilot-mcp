@@ -26,6 +26,14 @@ MENU_BUTTONS: list[tuple[str, str]] = [
     ("导出", "export"),
 ]
 
+MODULE_MENU_NAME_HINTS: dict[str, str] = {
+    "travel": "旅游管理",
+}
+
+BUSINESS_NAME_HINTS: dict[str, str] = {
+    "sim": "手机卡",
+}
+
 
 def _disabled_menu_plan_stub(context: dict[str, Any]) -> dict[str, Any]:
     """Minimal menu_plan for H2 markers and tooling when menu SQL is disabled."""
@@ -279,7 +287,7 @@ def build_menu_plan(
         else infer_missing_root_menu_name(context, resolved_root, menu_name)
     )
     table_comment = str(context["table_schema"].get("table_comment") or context["entity_name"])
-    raw_menu_name = str(menu_name or table_comment or context["entity_name"]).strip()
+    raw_menu_name = resolve_business_menu_label_source(context, menu_name, table_comment)
     menu_label = normalize_business_menu_name(raw_menu_name)
     button_prefix_name = strip_management_suffix(menu_label)
     business_menu_path = normalize_snake_case(
@@ -416,6 +424,10 @@ def infer_missing_root_menu_name(
     if resolved_root and str(resolved_root.get("name") or "").strip():
         return str(resolved_root["name"]).strip()
 
+    module_hint = infer_module_menu_name(context)
+    if module_hint:
+        return module_hint
+
     table_schema = context.get("table_schema") or {}
     for value in (
         requested_menu_name,
@@ -432,6 +444,57 @@ def infer_missing_root_menu_name(
 
 def contains_cjk(value: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def infer_module_menu_name(context: dict[str, Any]) -> str | None:
+    for key in (
+        str(context.get("configured_module_name") or ""),
+        str(context.get("module_name") or ""),
+    ):
+        normalized = normalize_snake_case(key)
+        if normalized in MODULE_MENU_NAME_HINTS:
+            return MODULE_MENU_NAME_HINTS[normalized]
+    return None
+
+
+def resolve_business_menu_label_source(
+    context: dict[str, Any],
+    requested_menu_name: str | None,
+    table_comment: str,
+) -> str:
+    if requested_menu_name and requested_menu_name.strip():
+        return requested_menu_name.strip()
+
+    module_label = infer_module_menu_name(context)
+    business_hint = infer_business_menu_name(context)
+    if business_hint:
+        suffix = extract_table_comment_suffix(table_comment, module_label, business_hint)
+        return f"{business_hint} {suffix}".strip() if suffix else business_hint
+
+    return str(table_comment or context["entity_name"]).strip()
+
+
+def infer_business_menu_name(context: dict[str, Any]) -> str | None:
+    business_name = normalize_snake_case(str(context.get("business_name") or ""))
+    for part in business_name.split("_"):
+        if part in BUSINESS_NAME_HINTS:
+            return BUSINESS_NAME_HINTS[part]
+    return None
+
+
+def extract_table_comment_suffix(
+    table_comment: str,
+    module_label: str | None,
+    business_label: str,
+) -> str:
+    cleaned = strip_management_suffix(normalize_business_menu_name(str(table_comment or "")))
+    for prefix in (
+        strip_management_suffix(module_label or ""),
+        business_label,
+    ):
+        if prefix and cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+    return cleaned
 
 
 def resolve_module_root_menu(
