@@ -300,7 +300,8 @@ def build_codegen_context(
     effective_module_name = str(backend_target.get("package_module_name") or module_name)
     menu_context = resolve_menu_context(
         backend_repo_root,
-        module_name=effective_module_name,
+        module_name=module_name,
+        fallback_module_name=effective_module_name,
         menu_name=menu_name or entity_name,
         parent_menu_name=parent_menu_name,
         parent_menu_id=parent_menu_id,
@@ -451,6 +452,7 @@ def resolve_menu_context(
     backend_root: Path,
     *,
     module_name: str,
+    fallback_module_name: str | None = None,
     menu_name: str,
     parent_menu_name: str | None,
     parent_menu_id: int | None,
@@ -466,6 +468,10 @@ def resolve_menu_context(
 
     menus = load_system_menus(sql_dump)
     parent_candidates = find_parent_menu_candidates(menus, module_name)
+    if fallback_module_name and fallback_module_name != module_name:
+        parent_candidates = deduplicate_menu_candidates(
+            parent_candidates + find_parent_menu_candidates(menus, fallback_module_name)
+        )
     resolved_parent = None
 
     if parent_menu_id is not None:
@@ -488,6 +494,22 @@ def resolve_menu_context(
         if resolved_parent
         else "未能自动确定父菜单，请 AI 结合业务语义或用户输入决定",
     }
+
+
+def deduplicate_menu_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for candidate in candidates:
+        candidate_id = coerce_int(candidate.get("id"))
+        if candidate_id is None:
+            deduped.append(candidate)
+            continue
+        if candidate_id in seen_ids:
+            continue
+        seen_ids.add(candidate_id)
+        deduped.append(candidate)
+    return deduped
+
 
 def write_mysql_migration(
     backend_root: Path,

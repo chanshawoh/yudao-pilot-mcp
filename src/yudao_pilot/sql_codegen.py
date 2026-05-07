@@ -273,10 +273,13 @@ def build_menu_plan(
         for menu in menus
         if coerce_int(menu.get("id")) is not None
     }
+    configured_module_name = str(context.get("configured_module_name") or "").strip()
+    root_module_name = configured_module_name or str(context["module_name"]).strip()
     resolved_root = resolve_module_root_menu(
         menus,
         menus_by_id,
-        module_name=context["module_name"],
+        module_name=root_module_name,
+        fallback_module_name=context["module_name"],
         requested_parent_menu_name=context["menu_context"].get("requested_parent_menu_name"),
         requested_parent_menu_id=context["menu_context"].get("requested_parent_menu_id"),
     )
@@ -297,7 +300,7 @@ def build_menu_plan(
         f"{context['module_name']}/"
         f"{context['generated_file_plan']['frontend_business_path']}/index"
     ).replace("//", "/")
-    permission_prefix = build_permission_prefix(context["module_name"], context["entity_name"])
+    permission_prefix = build_permission_prefix(root_module_name, context["entity_name"])
 
     root_sort = (
         coerce_int((resolved_root or {}).get("sort"))
@@ -329,11 +332,11 @@ def build_menu_plan(
         "type": 1,
         "sort": root_sort,
         "parent_id": 0,
-        "path": f"/{context['module_name']}",
+        "path": f"/{root_module_name}",
         "icon": root_icon,
         "component": None,
         "component_name": None,
-        "lookup_paths": [f"/{context['module_name']}", context["module_name"]],
+        "lookup_paths": [f"/{root_module_name}", root_module_name],
     }
 
     resolved_business = find_existing_business_menu(
@@ -502,6 +505,7 @@ def resolve_module_root_menu(
     menus_by_id: dict[int, dict[str, Any]],
     *,
     module_name: str,
+    fallback_module_name: str | None = None,
     requested_parent_menu_name: str | None,
     requested_parent_menu_id: int | None,
 ) -> dict[str, Any] | None:
@@ -525,18 +529,34 @@ def resolve_module_root_menu(
     if direct_candidates:
         return sort_menu_candidates(direct_candidates)[0]
 
+    if fallback_module_name and fallback_module_name != module_name:
+        fallback_direct_candidates = [
+            menu
+            for menu in menus
+            if coerce_int(menu.get("parent_id")) == 0
+            and normalize_menu_path(str(menu.get("path") or "")) == fallback_module_name
+        ]
+        if fallback_direct_candidates:
+            return sort_menu_candidates(fallback_direct_candidates)[0]
+
     inferred_roots: list[dict[str, Any]] = []
     seen_ids: set[int] = set()
-    for menu in menus:
-        component = str(menu.get("component") or "")
-        if not component.startswith(f"{module_name}/"):
-            continue
-        root_menu = ascend_to_root_menu(menu, menus_by_id)
-        root_id = coerce_int((root_menu or {}).get("id"))
-        if root_menu is None or root_id is None or root_id in seen_ids:
-            continue
-        seen_ids.add(root_id)
-        inferred_roots.append(root_menu)
+    module_names = [module_name]
+    if fallback_module_name and fallback_module_name not in module_names:
+        module_names.append(fallback_module_name)
+    for candidate_module_name in module_names:
+        for menu in menus:
+            component = str(menu.get("component") or "")
+            if not component.startswith(f"{candidate_module_name}/"):
+                continue
+            root_menu = ascend_to_root_menu(menu, menus_by_id)
+            root_id = coerce_int((root_menu or {}).get("id"))
+            if root_menu is None or root_id is None or root_id in seen_ids:
+                continue
+            seen_ids.add(root_id)
+            inferred_roots.append(root_menu)
+        if inferred_roots:
+            return sort_menu_candidates(inferred_roots)[0]
     if inferred_roots:
         return sort_menu_candidates(inferred_roots)[0]
     return None

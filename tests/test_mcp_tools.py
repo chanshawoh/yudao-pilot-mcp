@@ -2583,6 +2583,94 @@ def test_generate_codegen_sql_tool_uses_domain_names_for_travel_sim_sku(
     assert "'旅游手机卡 SKU卡类型'" in sql
 
 
+def test_generate_codegen_sql_tool_reuses_configured_root_for_nested_backend_module(
+    workspace_builder,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = workspace_builder(
+        manual_rules_yaml="""
+- module: travel
+  table_prefixes:
+    - travel_sim
+  table_rules:
+    - table: travel_sim_sku
+      business: sim_sku
+      entity: TravelSimSku
+""".strip()
+    )
+    backend_root = _create_fake_backend(tmp_path)
+    _rewrite_backend_path(workspace_root, backend_root)
+    sql_dump_path = backend_root / "sql" / "mysql" / "ruoyi-vue-pro.sql"
+    sql_dump_path.parent.mkdir(parents=True, exist_ok=True)
+    sql_dump_path.write_text(
+        dedent(
+            """\
+            INSERT INTO `system_menu` (`id`, `name`, `permission`, `type`, `sort`, `parent_id`, `path`, `icon`, `component`, `component_name`, `status`, `visible`, `keep_alive`, `always_show`, `creator`, `create_time`, `updater`, `update_time`, `deleted`) VALUES (5286, '旅游手机卡SPU管理', '', 2, 0, 5285, 'sim-spu', 'ep:apple', 'travel/sim_spu/index', 'SimSpu', 0, b'1', b'1', b'1', 'yudao-pilot', '2026-04-28 16:34:01', 'yudao-pilot', '2026-04-28 16:34:01', b'0');
+            INSERT INTO `system_menu` (`id`, `name`, `permission`, `type`, `sort`, `parent_id`, `path`, `icon`, `component`, `component_name`, `status`, `visible`, `keep_alive`, `always_show`, `creator`, `create_time`, `updater`, `update_time`, `deleted`) VALUES (5285, '旅游', '', 1, 510, 0, '/travel', 'ep:menu', NULL, NULL, 0, b'1', b'1', b'1', 'yudao-pilot', '2026-04-28 16:34:01', 'yudao-pilot', '2026-04-28 16:34:01', b'0');
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "travel_sim_sku",
+        "table_comment": "旅游手机卡SKU",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool(
+        "travel_sim_sku",
+        str(workspace_root),
+        backend_module_dir="travel/sim",
+        backend_package_module="sim",
+    )
+
+    assert result["ok"] is True
+    menu_plan = result["data"]["sql_bundle"]["menu_plan"]
+    assert menu_plan["needs_create_root_menu"] is False
+    assert menu_plan["root_menu"]["id"] == 5285
+    assert menu_plan["root_menu"]["path"] == "/travel"
+    assert menu_plan["permission_prefix"] == "travel:sim-sku"
+    assert [button["permission"] for button in menu_plan["buttons"]] == [
+        "travel:sim-sku:query",
+        "travel:sim-sku:create",
+        "travel:sim-sku:update",
+        "travel:sim-sku:delete",
+        "travel:sim-sku:export",
+    ]
+    sql = result["data"]["sql_bundle"]["mysql"]["content"]
+    assert "path = '/travel'" in sql
+    assert "path = '/sim'" not in sql
+    assert "'travel:sim-sku:query'" in sql
+    assert "'sim:travel-sim-sku:query'" not in sql
+
+
 def test_generate_codegen_sql_tool_supports_explicit_menu_icon_override(
     workspace_builder, monkeypatch
 ) -> None:
