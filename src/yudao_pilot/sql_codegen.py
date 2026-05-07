@@ -276,7 +276,7 @@ def build_menu_plan(
     module_root_name = (
         str(module_menu_name).strip()
         if module_menu_name and str(module_menu_name).strip()
-        else str((resolved_root or {}).get("name") or context["module_name"]).strip()
+        else infer_missing_root_menu_name(context, resolved_root, menu_name)
     )
     table_comment = str(context["table_schema"].get("table_comment") or context["entity_name"])
     raw_menu_name = str(menu_name or table_comment or context["entity_name"]).strip()
@@ -406,6 +406,32 @@ def find_existing_business_menu(
             if normalize_menu_path(str(menu.get("path") or "")) == normalize_menu_path(menu_path):
                 return menu
     return None
+
+
+def infer_missing_root_menu_name(
+    context: dict[str, Any],
+    resolved_root: dict[str, Any] | None,
+    requested_menu_name: str | None,
+) -> str:
+    if resolved_root and str(resolved_root.get("name") or "").strip():
+        return str(resolved_root["name"]).strip()
+
+    table_schema = context.get("table_schema") or {}
+    for value in (
+        requested_menu_name,
+        table_schema.get("table_comment"),
+        context.get("menu_name"),
+    ):
+        if not isinstance(value, str):
+            continue
+        normalized = strip_management_suffix(normalize_business_menu_name(value))
+        if contains_cjk(normalized):
+            return normalized
+    return str(context["module_name"]).strip()
+
+
+def contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
 
 
 def resolve_module_root_menu(

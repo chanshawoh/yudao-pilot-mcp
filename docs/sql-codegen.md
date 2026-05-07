@@ -12,6 +12,10 @@ Yudao Pilot MCP 可以为代码生成流程补齐 SQL 产物：
 - 后端模块 H2 `clean.sql`
 - 可选的真实数据库菜单和字典写入
 
+默认表生成路径中，`generate_codegen_scaffold(write_files=true)` 会一并处理这些 SQL 产物：写入 MySQL 菜单/字典迁移、合并 H2 `create_tables.sql` 和 `clean.sql`，并在配置允许时执行真实数据库写入。单独调用 `generate_codegen_sql` 适用于只补 SQL 或重跑 SQL 的场景。
+
+当无法从已有 `system_menu` 判断父菜单时，MCP 不会要求 AI 停止等待用户；它会根据 `module_menu_name`、表注释、菜单名和业务名推断模块根菜单名称，生成幂等 SQL：已有则复用，不存在则自动创建。
+
 ### 配置开关
 
 | 配置 | SQL 生成行为 | 数据库执行行为 |
@@ -83,6 +87,10 @@ Yudao Pilot MCP can generate SQL artifacts for the code-generation flow:
 - Backend module H2 `create_tables.sql`
 - Backend module H2 `clean.sql`
 - Optional menu and dictionary writes to a real database
+
+In the default table-generation path, `generate_codegen_scaffold(write_files=true)` also handles these SQL artifacts: it writes the MySQL menu/dictionary migration, merges H2 `create_tables.sql` and `clean.sql`, and applies menu/dictionary data to the real database when the workspace config allows it. Use `generate_codegen_sql` directly when you only need to prepare or rerun SQL.
+
+When an existing parent menu cannot be inferred from `system_menu`, the MCP should not stop and wait for the AI/user. It infers a root menu name from `module_menu_name`, table comments, menu names, and business names, then emits idempotent SQL that reuses an existing menu or creates a new one.
 
 ### Config Switches
 

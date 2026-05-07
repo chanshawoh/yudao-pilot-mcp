@@ -159,6 +159,138 @@ def _describe_sql_apply_skip(
     return "；".join(parts)
 
 
+def _prepare_codegen_sql_result(
+    root: Path,
+    config: WorkspaceConfig,
+    context: dict[str, Any],
+    *,
+    write_files: bool,
+    overwrite: bool,
+    module_menu_name: str | None = None,
+    menu_name: str | None = None,
+    menu_icon: str | None = None,
+    module_menu_icon: str | None = None,
+) -> dict[str, Any]:
+    sql_result: dict[str, Any] = {}
+    sql_bundle = build_codegen_sql_bundle(
+        context,
+        module_menu_name=module_menu_name,
+        menu_name=menu_name,
+        menu_icon=menu_icon,
+        module_menu_icon=module_menu_icon,
+    )
+    sql_result["sql_bundle"] = sql_bundle
+    if not sql_bundle.get("ok"):
+        sql_result["ok"] = False
+        sql_result["error_code"] = "generate_codegen_sql_failed"
+        sql_result["message"] = str(sql_bundle.get("message") or "代码生成 SQL 构建失败")
+        return sql_result
+
+    if write_files:
+        write_result = write_codegen_sql_bundle(sql_bundle, overwrite=overwrite)
+        write_result["workspace_root"] = str(root)
+        sql_result["write_result"] = write_result
+
+    codegen_sql = context.get("codegen_sql", {})
+    menu_mode = str(codegen_sql.get("menu_mode") or "auto")
+    dict_mode = str(codegen_sql.get("dict_mode") or "auto")
+    apply_to_database = bool(codegen_sql.get("apply_to_database"))
+    menu_plan = sql_bundle.get("menu_plan", {})
+    dict_plan = sql_bundle.get("dict_plan", {})
+
+    menu_generates_sql = not menu_plan.get("disabled")
+    dict_generates_sql = not dict_plan.get("disabled")
+    menu_needs_db = (
+        apply_to_database
+        and menu_mode == "auto"
+        and menu_generates_sql
+        and not menu_plan.get("all_menus_exist", False)
+    )
+    dict_needs_db = (
+        apply_to_database
+        and dict_mode == "auto"
+        and dict_generates_sql
+        and bool(dict_plan.get("has_dicts"))
+        and not bool(dict_plan.get("all_complete", False))
+    )
+
+    if not apply_to_database:
+        sql_result["apply_result"] = {
+            "ok": True,
+            "skipped_reason": "apply_disabled_by_config",
+            "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+            "message": "codegen.apply_to_database=false，跳过菜单与字典写库",
+        }
+    elif not menu_needs_db and not dict_needs_db:
+        sql_result["apply_result"] = {
+            "ok": True,
+            "skipped_reason": "no_database_apply_needed",
+            "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+            "message": _describe_sql_apply_skip(menu_plan, dict_plan),
+        }
+    else:
+        database_result = resolve_database_config(root, config)
+        sql_result["database"] = database_result
+        if not database_result.get("ok"):
+            sql_result["ok"] = False
+            sql_result["error_code"] = "database_config_unresolved"
+            sql_result["message"] = str(database_result.get("message") or "数据库配置未解析")
+            return sql_result
+
+        if menu_needs_db:
+            sql_result["apply_result"] = apply_menu_plan_to_database(
+                database_result["database"],
+                menu_plan,
+            )
+        else:
+            sql_result["apply_result"] = {
+                "ok": True,
+                "skipped_reason": "menu_skipped",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": _describe_menu_apply_skip(menu_plan),
+            }
+
+        if dict_needs_db:
+            sql_result["dict_apply_result"] = apply_dict_plan_to_database(
+                database_result["database"],
+                dict_plan,
+            )
+        elif dict_plan.get("has_dicts"):
+            sql_result["dict_apply_result"] = {
+                "ok": True,
+                "skipped_reason": "all_dicts_complete",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": "所有字典数据已存在且完整，跳过字典创建",
+            }
+        else:
+            sql_result["dict_apply_result"] = {
+                "ok": True,
+                "skipped_reason": "dict_skipped",
+                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
+                "message": _describe_dict_apply_skip(dict_plan),
+            }
+
+    write_failed = bool(write_files and not sql_result.get("write_result", {}).get("ok", True))
+    apply_succeeded = bool(
+        sql_result.get("apply_result", {}).get("ok", True)
+        and sql_result.get("dict_apply_result", {}).get("ok", True)
+    )
+    if write_failed:
+        sql_result["ok"] = bool(apply_to_database and apply_succeeded)
+        sql_result["error_code"] = None if sql_result["ok"] else "generate_codegen_sql_write_failed"
+        sql_result["message"] = (
+            "SQL 已生成并执行数据库写入，但部分文件写入失败"
+            if sql_result["ok"]
+            else "SQL 已生成，但写入文件时存在失败项"
+        )
+        return sql_result
+
+    sql_result["ok"] = apply_succeeded
+    sql_result["error_code"] = None if apply_succeeded else "generate_codegen_sql_apply_failed"
+    sql_result["message"] = "代码生成 SQL 已准备完成" if apply_succeeded else "SQL 已生成，但数据库写入存在失败项"
+    return sql_result
+
+
 def load_config_or_error(
     workspace_root: str | None = None,
 ) -> tuple[Path, WorkspaceConfig] | dict[str, Any]:
@@ -500,7 +632,22 @@ def generate_codegen_scaffold_tool(
         write_result["workspace_root"] = str(root)
         result["write_result"] = write_result
         if write_result["ok"]:
-            return success_response("代码骨架已生成并写入工作区", result)
+            sql_result = _prepare_codegen_sql_result(
+                root,
+                config,
+                context,
+                write_files=True,
+                overwrite=overwrite,
+                menu_name=menu_name,
+            )
+            result["sql_result"] = sql_result
+            if sql_result["ok"]:
+                return success_response("代码骨架与 SQL 资产已生成并按配置处理完成", result)
+            return error_response(
+                str(sql_result.get("error_code") or "generate_codegen_sql_failed"),
+                str(sql_result.get("message") or "代码骨架已写入，但 SQL 资产处理失败"),
+                result,
+            )
         return error_response("generate_codegen_scaffold_failed", "代码骨架生成成功，但写入存在失败项", result)
     return success_response("代码骨架生成成功", result)
 
@@ -645,121 +792,45 @@ def generate_codegen_sql_tool(
     table_schema = context.get("table_schema") or {}
     if table_schema and not table_schema.get("resolved"):
         return stop_response_from_schema(table_schema, result)
-    sql_bundle = build_codegen_sql_bundle(
+    sql_result = _prepare_codegen_sql_result(
+        root,
+        config,
         context,
+        write_files=write_files,
+        overwrite=overwrite,
         module_menu_name=module_menu_name,
         menu_name=menu_name,
         menu_icon=menu_icon,
         module_menu_icon=module_menu_icon,
     )
+    result.update(sql_result)
+    sql_bundle = sql_result.get("sql_bundle", {})
     result["sql_bundle"] = sql_bundle
     if not sql_bundle.get("ok"):
         return error_response("generate_codegen_sql_failed", sql_bundle["message"], result)
-
-    if write_files:
-        write_result = write_codegen_sql_bundle(sql_bundle, overwrite=overwrite)
-        write_result["workspace_root"] = str(root)
-        result["write_result"] = write_result
-
-    codegen_sql = context.get("codegen_sql", {})
-    menu_mode = str(codegen_sql.get("menu_mode") or "auto")
-    dict_mode = str(codegen_sql.get("dict_mode") or "auto")
-    apply_to_database = bool(codegen_sql.get("apply_to_database"))
-    menu_plan = sql_bundle.get("menu_plan", {})
-    dict_plan = sql_bundle.get("dict_plan", {})
-
-    menu_generates_sql = not menu_plan.get("disabled")
-    dict_generates_sql = not dict_plan.get("disabled")
-    menu_needs_db = (
-        apply_to_database
-        and menu_mode == "auto"
-        and menu_generates_sql
-        and not menu_plan.get("all_menus_exist", False)
-    )
-    dict_needs_db = (
-        apply_to_database
-        and dict_mode == "auto"
-        and dict_generates_sql
-        and bool(dict_plan.get("has_dicts"))
-        and not bool(dict_plan.get("all_complete", False))
-    )
-
-    if not apply_to_database:
-        result["apply_result"] = {
-            "ok": True,
-            "skipped_reason": "apply_disabled_by_config",
-            "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-            "message": "codegen.apply_to_database=false，跳过菜单与字典写库",
-        }
-    elif not menu_needs_db and not dict_needs_db:
-        result["apply_result"] = {
-            "ok": True,
-            "skipped_reason": "no_database_apply_needed",
-            "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-            "message": _describe_sql_apply_skip(menu_plan, dict_plan),
-        }
-        return success_response("无需向数据库写入菜单或字典", result)
-    else:
-        database_result = resolve_database_config(root, config)
-        result["database"] = database_result
-        if not database_result.get("ok"):
-            return error_response(
-                "database_config_unresolved",
-                database_result["message"],
-                result,
-            )
-
-        if menu_needs_db:
-            result["apply_result"] = apply_menu_plan_to_database(
-                database_result["database"],
-                menu_plan,
-            )
-        else:
-            result["apply_result"] = {
-                "ok": True,
-                "skipped_reason": "menu_skipped",
-                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-                "message": _describe_menu_apply_skip(menu_plan),
-            }
-
-        if dict_needs_db:
-            result["dict_apply_result"] = apply_dict_plan_to_database(
-                database_result["database"],
-                dict_plan,
-            )
-        elif dict_plan.get("has_dicts"):
-            result["dict_apply_result"] = {
-                "ok": True,
-                "skipped_reason": "all_dicts_complete",
-                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-                "message": "所有字典数据已存在且完整，跳过字典创建",
-            }
-        else:
-            result["dict_apply_result"] = {
-                "ok": True,
-                "skipped_reason": "dict_skipped",
-                "codegen_sql_modes": {"menu": menu_mode, "dict": dict_mode},
-                "message": _describe_dict_apply_skip(dict_plan),
-            }
-
-    write_failed = bool(write_files and not result.get("write_result", {}).get("ok", True))
-    apply_succeeded = bool(
-        result.get("apply_result", {}).get("ok", True)
-        and result.get("dict_apply_result", {}).get("ok", True)
-    )
-    if write_failed:
-        if apply_to_database and apply_succeeded:
-            return success_response(
-                "SQL 已生成并执行数据库写入，但部分文件写入失败",
-                result,
-            )
+    if sql_result["ok"]:
+        if sql_result.get("message") == "SQL 已生成并执行数据库写入，但部分文件写入失败":
+            return success_response(sql_result["message"], result)
+        if sql_result.get("apply_result", {}).get("skipped_reason") == "no_database_apply_needed":
+            return success_response("无需向数据库写入菜单或字典", result)
+        return success_response("代码生成 SQL 已准备完成", result)
+    if sql_result.get("error_code") == "database_config_unresolved":
+        return error_response(
+            "database_config_unresolved",
+            str(sql_result.get("message") or "数据库配置未解析"),
+            result,
+        )
+    if sql_result.get("error_code") == "generate_codegen_sql_write_failed":
         return error_response(
             "generate_codegen_sql_write_failed",
             "SQL 已生成，但写入文件时存在失败项",
             result,
         )
-
-    return success_response("代码生成 SQL 已准备完成", result)
+    return error_response(
+        str(sql_result.get("error_code") or "generate_codegen_sql_failed"),
+        str(sql_result.get("message") or "代码生成 SQL 处理失败"),
+        result,
+    )
 
 
 def infer_table_resolution(

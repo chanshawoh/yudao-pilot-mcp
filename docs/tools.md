@@ -96,6 +96,7 @@ write_mysql_migration
 
 - 生成后端和前端骨架代码
 - 可预览，也可写入工作区
+- `write_files=true` 时一并写入菜单/字典 MySQL 迁移和 H2 测试 SQL，并按配置决定是否落库
 
 `generate_codegen_sql`
 

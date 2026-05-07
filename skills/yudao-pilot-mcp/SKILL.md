@@ -120,6 +120,7 @@ inspect_table_schema(table_name)
 - 按当前 `.yudao-pilot/config.yaml` 执行完整生成链路
 - 同时考虑代码、菜单 SQL、字典 SQL、H2 SQL
 - 是否写文件、是否写库，全部按配置和工具参数决定
+- `generate_codegen_scaffold(write_files=true)` 会一并生成并写入菜单/字典 MySQL 迁移和 H2 测试 SQL，并按配置决定是否真实落库
 
 推荐顺序：
 
@@ -128,12 +129,13 @@ load_workspace_config
 validate_workspace_projects
 resolve_database_config
 inspect_codegen_context(table_name)
-generate_codegen_sql(table_name, write_files=false|true)
 generate_codegen_scaffold(table_name, write_files=false)
 generate_codegen_scaffold(table_name, write_files=true)
 ```
 
-如果 `generate_codegen_sql` 依配置允许落库，就接受这就是配置要求，不要擅自跳过。
+如果只需要单独处理 SQL，可调用 `generate_codegen_sql(table_name, write_files=true)`。默认表生成不需要在 `generate_codegen_scaffold(write_files=true)` 之后再重复调用 SQL 工具。
+
+如果 SQL 生成链路依配置允许落库，就接受这就是配置要求，不要擅自跳过。
 
 同一张表的菜单/字典迁移如果逻辑文件已存在（例如 `*_add_xxx_menus.sql`），不要重复生成第二份；应复用已有逻辑迁移文件，必要时仅在用户允许覆盖时更新它。
 
@@ -264,7 +266,8 @@ private Long id;
 2. 搜索已有 `system_menu` SQL。
 3. 按模块名、菜单名、路由 path、component、permission 前缀匹配。
 4. 如果有合理置信度，传 `parent_menu_id` 或 `parent_menu_name` 调用 SQL 工具。
-5. 只有多个候选都合理且无法区分时，才问用户。
+5. 如果没有合理父菜单，继续调用 MCP；MCP 会按业务名/表注释自动生成模块根菜单。
+6. 只有用户明确要求复用某个已有父菜单、但多个候选都合理且无法区分时，才问用户。
 
 ### 后端模块规则
 

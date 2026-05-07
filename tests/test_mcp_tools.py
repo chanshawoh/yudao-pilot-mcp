@@ -2245,6 +2245,101 @@ def test_generate_codegen_sql_tool_applies_when_config_enabled_and_auto_mode(
     assert len(apply_calls) == 1
 
 
+def test_generate_codegen_scaffold_tool_writes_sql_assets_and_applies_by_config(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    config_path = workspace_root / ".yudao-pilot" / "config.yaml"
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_config["codegen"]["apply_to_database"] = True
+    raw_config["codegen"]["menu_sql_mode"] = "auto"
+    raw_config["codegen"]["dict_sql_mode"] = "auto"
+    config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "member_user",
+        "table_comment": "会员用户",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr(
+        "yudao_pilot.server.resolve_database_config",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "database": {
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+                "username": "root",
+                "password": "123456",
+            },
+            "message": "ok",
+        },
+    )
+
+    apply_calls: list[dict[str, object]] = []
+
+    def fake_apply_menu(database_config, menu_plan):
+        apply_calls.append({"database": database_config, "menu_plan": menu_plan})
+        return {"ok": True, "created": ["业务菜单:会员用户管理"], "updated": [], "skipped": []}
+
+    monkeypatch.setattr("yudao_pilot.server.apply_menu_plan_to_database", fake_apply_menu)
+    monkeypatch.setattr(
+        "yudao_pilot.server.write_generated_files",
+        lambda *args, **kwargs: {"ok": True, "results": []},
+    )
+    monkeypatch.setattr(
+        "yudao_pilot.server.write_codegen_sql_bundle",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "results": [
+                {"ok": True, "kind": "mysql_migration", "written": True},
+                {"ok": True, "kind": "h2_create_tables", "written": True},
+                {"ok": True, "kind": "h2_clean", "written": True},
+            ],
+        },
+    )
+
+    result = generate_codegen_scaffold_tool("member_user", str(workspace_root), write_files=True)
+
+    assert result["ok"] is True
+    sql_result = result["data"]["sql_result"]
+    assert sql_result["write_result"]["ok"] is True
+    assert {
+        item["kind"] for item in sql_result["write_result"]["results"]
+    } == {"mysql_migration", "h2_create_tables", "h2_clean"}
+    assert sql_result["sql_bundle"]["codegen_sql_modes"] == {"menu": "auto", "dict": "auto"}
+    assert sql_result["apply_result"]["ok"] is True
+    assert len(apply_calls) == 1
+
+
 def test_generate_codegen_sql_tool_creates_root_menu_when_missing(
     workspace_builder, monkeypatch
 ) -> None:
@@ -2324,6 +2419,63 @@ def test_generate_codegen_sql_tool_creates_root_menu_when_missing(
     assert menu_plan["root_menu"]["name"] == "自定义模块"
     assert menu_plan["root_menu"]["path"] == "/custom"
     assert menu_plan["business_menu"]["name"] == "自定义演示管理"
+
+
+def test_generate_codegen_sql_tool_names_missing_root_menu_from_business(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder(
+        manual_rules_yaml="""
+- module: custom
+  table_prefixes:
+    - custom_demo
+  table_rules:
+    - table: custom_demo
+      business: custom_demo
+      entity: CustomDemo
+""".strip()
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "custom_demo",
+        "table_comment": "自定义演示",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_sql_tool("custom_demo", str(workspace_root))
+
+    assert result["ok"] is True
+    menu_plan = result["data"]["sql_bundle"]["menu_plan"]
+    assert menu_plan["needs_create_root_menu"] is True
+    assert menu_plan["root_menu"]["name"] == "自定义演示"
+    assert menu_plan["root_menu"]["name"] != "custom"
+    assert "'自定义演示'" in result["data"]["sql_bundle"]["mysql"]["content"]
 
 
 def test_generate_codegen_sql_tool_supports_explicit_menu_icon_override(
