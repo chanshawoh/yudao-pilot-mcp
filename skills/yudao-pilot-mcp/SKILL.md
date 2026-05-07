@@ -1,60 +1,388 @@
 ---
 name: yudao-pilot-mcp
 description: >
-  Use when working on a yudao / ruoyi-vue-pro / 芋道项目 and the user wants AI-assisted code generation,
-  project detection, database config discovery, table schema inspection, menu/dict SQL generation,
-  or safe writing of generated backend/frontend files through the Yudao Pilot MCP server. Also use for Chinese
-  requests such as 芋道代码生成, 若依代码生成, 生成菜单SQL, 生成前后端代码, 初始化 .yudao-pilot 配置.
+  当用户在芋道、yudao、ruoyi-vue-pro 或若依生态项目中表达“根据数据库表生成代码”“按表生成代码”
+  “根据表结构生成前后端”“为某张表生成 CRUD / 管理后台 / 接口 / 页面 / 菜单 / 字典 / SQL”等意图时使用，
+  并通过当前 Yudao Pilot MCP 完成表结构检查、代码生成上下文推导、后端与前端代码生成、菜单 SQL、字典 SQL、
+  H2 测试 SQL 生成和按配置安全写入。也用于项目识别、.yudao-pilot 配置初始化与校验、数据库配置解析。
 ---
 
 # Yudao Pilot MCP
 
-Use this skill before calling the Yudao Pilot MCP server or when deciding whether the MCP is appropriate.
+这是 Yudao Pilot MCP 的操作型 Skill，用于指导 AI 在芋道 / ruoyi-vue-pro 项目中稳定完成项目识别、配置读取、表结构解析、代码生成、SQL 生成和安全写入。
 
-## 中文说明（给人类）
+核心原则：
 
-这个 skill 是给 AI 使用 Yudao Pilot MCP 的操作说明，也方便中文用户快速判断“什么时候该让 AI 调 MCP”。
+- 以 `./.yudao-pilot/config.yaml` 为唯一配置事实来源，不绕过配置猜路径。
+- 配置代表用户意图，不能为了“安全”擅自改配置。
+- 只要用户有“根据表生成代码 / 按表生成 / 表结构生成 CRUD / 表生成前后端”的意图，默认使用当前 skill 调用 Yudao Pilot MCP。
+- 只要用户调用 yudao-pilot 做“表生成/代码生成”，默认就按当前配置执行完整生成链路，而不是擅自缩减成“只生成部分代码”。
+- 先自己推断可推断的问题，例如目标模块、父菜单、后端 jar 子模块、前端类型。
+- 普通代码文件默认不能覆盖已有文件；合并型文件按合并逻辑修改已有文件。
+- 菜单/字典是否真实落库只看配置，不看 AI 的临时判断。
 
-适合使用的场景：
+## 触发意图识别
 
-- 你在芋道 / ruoyi-vue-pro / 若依生态项目里开发
-- 想让 AI 根据数据库表生成后端、管理后台、uni-app 等代码
-- 想让 AI 自动识别当前项目里的后端、前端目录
-- 想生成菜单 SQL、字典 SQL、H2 测试 SQL
-- 想让 AI 把生成结果写到正确模块，而不是凭目录名乱猜
+用户没有显式说“Yudao Pilot MCP”也应触发本 skill，只要同时满足：
 
-不适合使用的场景：
+- 当前任务位于或指向芋道、yudao、ruoyi-vue-pro、若依生态项目。
+- 用户想从数据库表、表名、表结构、DDL、MySQL 表、已有业务表生成代码或 SQL。
 
-- 普通 Java / Vue 代码修改
-- 和芋道代码生成无关的重构
-- 只想让 AI 解释代码或做普通 bug 修复
-- 还没确认要生成哪张表、哪个业务模块、哪些前端目标
+这些表达都按“根据表生成代码”处理：
 
-使用边界：
+- “根据 `xxx` 表生成代码”
+- “按 `xxx` 表生成 CRUD”
+- “用这张表生成前后端”
+- “根据表结构生成接口和页面”
+- “为这张表生成管理后台 / 菜单 / 字典”
+- “把这个 DDL 生成到芋道项目”
+- “生成某张表的后端、Vue、Vben、uni-app 代码”
 
-- `./.yudao-pilot/config.yaml` 是路由依据，AI 不应该绕过它猜路径
-- MCP 第一次自动生成 yaml 后，AI 必须告诉用户已写入哪些项目目录，并询问是继续还是先人工审阅
-- 遇到 `packaging=pom` 的聚合模块时，AI 不应该把代码写到聚合模块根目录，而要使用 MCP 推导出的 jar 子模块目标
-- 写库操作只有在 `codegen.apply_to_database=true` 时才允许执行
+触发后不要改用普通代码生成方式；必须先调用当前 Yudao Pilot MCP 的 `load_workspace_config` 和 `validate_workspace_projects`，再进入表生成工作流。
 
-## When To Use
+## 渐进式披露模式
 
-Use Yudao Pilot MCP when the user is in a yudao / ruoyi-vue-pro workspace and asks to:
+先用 MCP 返回的摘要判断下一步，只在需要时读取更深的数据。
 
-- detect backend/frontend project layout
-- initialize or inspect `./.yudao-pilot/config.yaml`
-- resolve local database settings from yudao backend config
-- inspect a MySQL table schema for code generation
-- infer module/business/entity routing for a table
-- generate backend/frontend scaffold files for yudao codegen
-- generate menu/dict SQL and H2 test SQL
-- safely write generated files into configured backend/frontend projects
+### 查看项目与配置
 
-Do not use it for general coding, arbitrary refactors, UI-only edits unrelated to yudao codegen, or when the user has not asked for yudao project-aware generation.
+优先调用：
 
-## MCP Server Location
+```text
+load_workspace_config
+validate_workspace_projects
+```
 
-Development checkout:
+如果需要识别单个目录：
+
+```text
+inspect_project_path(project_path)
+```
+
+如果缺少配置，`load_workspace_config` 会尝试安全初始化，并返回 `config_initialized`。此时必须暂停，向用户说明已创建的配置和识别到的后端/前端路径。
+
+### 查看生成上下文
+
+生成代码前必须调用：
+
+```text
+inspect_codegen_context(table_name)
+```
+
+关注这些字段：
+
+- `resolved_from_config`：表名到模块、业务名、实体名的解析结果。
+- `backend_project.codegen_target`：后端真实落点，尤其是聚合模块下的 jar 子模块。
+- `generated_file_plan`：后端和前端生成文件清单。
+- `menu_context`：父菜单候选和菜单 SQL 来源。
+- `codegen_sql`：`apply_to_database`、`menu_mode`、`dict_mode`。
+- `table_schema.columns`：字段、主键、字典、前端控件类型等信息。
+
+### 查看表结构
+
+表结构不清楚时调用：
+
+```text
+inspect_table_schema(table_name)
+```
+
+表结构解析规则：
+
+- 如果能从项目本地配置或工作区配置解析出数据库连接，优先以真实数据库为准。
+- 真实数据库里目标表不存在时，可以回退到“目标表自己的迁移 SQL”解析字段，但不要因为这个自动执行迁移 SQL、不要自动改库。
+- 不要把项目基准 `ruoyi-vue-pro.sql` 当作“新表必须存在”的依据；新表 DDL 本来就可能不在里面。
+- 如果没有可用数据库连接，也没有目标表自己的 SQL，再停止并提示用户补充信息。
+
+## 工具列表
+
+| 工具 | 用途 |
+| --- | --- |
+| `load_workspace_config` | 加载 `.yudao-pilot/config.yaml`，缺失时安全初始化 |
+| `init_workspace_config` | 主动初始化工作区配置 |
+| `inspect_project_path` | 识别指定目录是否为受支持的后端或前端项目 |
+| `validate_workspace_projects` | 校验配置里的项目路径和真实项目指纹是否匹配 |
+| `resolve_database_config` | 按配置和后端本地配置解析数据库连接 |
+| `infer_codegen_plan` | 根据表名推导模块、业务名、实体名和目标项目 |
+| `inspect_codegen_context` | 构建完整代码生成上下文 |
+| `inspect_table_schema` | 解析目标表字段 |
+| `generate_codegen_scaffold` | 生成后端和前端代码骨架，可预览或写入 |
+| `write_generated_files` | 写入外部生成的文件，走 MCP 路由和安全规则 |
+| `write_mysql_migration` | 写入 MySQL 迁移文件 |
+| `generate_codegen_sql` | 生成菜单 SQL、字典 SQL、H2 SQL，并按配置决定是否落库 |
+| `compare_codegen_reference_projects` | 对比参考项目代码生成实现 |
+
+## 典型工作流
+
+### 默认表生成
+
+当用户说“生成表代码”“按表生成”“调用 yudao-pilot 生成某张表”，默认理解为：
+
+- 按当前 `.yudao-pilot/config.yaml` 执行完整生成链路
+- 同时考虑代码、菜单 SQL、字典 SQL、H2 SQL
+- 是否写文件、是否写库，全部按配置和工具参数决定
+
+推荐顺序：
+
+```text
+load_workspace_config
+validate_workspace_projects
+resolve_database_config
+inspect_codegen_context(table_name)
+generate_codegen_sql(table_name, write_files=false|true)
+generate_codegen_scaffold(table_name, write_files=false)
+generate_codegen_scaffold(table_name, write_files=true)
+```
+
+如果 `generate_codegen_sql` 依配置允许落库，就接受这就是配置要求，不要擅自跳过。
+
+同一张表的菜单/字典迁移如果逻辑文件已存在（例如 `*_add_xxx_menus.sql`），不要重复生成第二份；应复用已有逻辑迁移文件，必要时仅在用户允许覆盖时更新它。
+
+### 仅代码生成
+
+只有在用户明确表达以下意思时，才缩窄为“只生成代码，不跑 SQL 工具”：
+
+- “只要前后端代码”
+- “不要菜单 / 不要字典 / 不要 SQL”
+- “不要落库”
+- “这次先别生成 SQL”
+
+此时才使用：
+
+```text
+load_workspace_config
+validate_workspace_projects
+resolve_database_config
+inspect_codegen_context(table_name)
+generate_codegen_scaffold(table_name, write_files=false)
+generate_codegen_scaffold(table_name, write_files=true)
+```
+
+如果目标文件已存在，MCP 会返回 `should_stop=true` 和 `next_action_prompt`。必须把覆盖问题交给用户，用户确认后才用 `overwrite=true` 重试。
+
+### SQL、菜单、字典生成
+
+当用户明确提到菜单、字典、迁移、H2、落库，或者默认表生成链路需要执行这些内容时，进入这条流程。
+
+```text
+inspect_codegen_context(table_name)
+generate_codegen_sql(table_name, parent_menu_id=..., write_files=true|false)
+```
+
+注意：
+
+- `generate_codegen_sql(write_files=false)` 只表示不写 SQL 文件。
+- `write_files=false` 不是数据库 dry-run。
+- 如果 `codegen.apply_to_database=true` 且对应 SQL mode 为 `auto`，SQL 工具可能按设计写入真实数据库。
+- 如果用户只要 SQL 文件但当前配置允许落库，必须让用户明确选择：改配置、改 SQL mode，或接受按配置落库。不能由 AI 静默修改配置。
+
+### 外部生成文件写入
+
+当 AI 在 MCP 外部生成了文件内容，使用：
+
+```text
+write_generated_files(files)
+```
+
+每个文件必须带：
+
+- `target_kind`
+- `target_type`
+- `relative_path`
+- `content`
+- `overwrite`，默认应为 `false`
+
+## 硬性规则
+
+### 配置不可被 AI 擅自改写
+
+不要为了规避风险自动修改这些配置：
+
+- `codegen.apply_to_database`
+- `codegen.menu_sql_mode`
+- `codegen.dict_sql_mode`
+- `codegen.routing`
+- `manual_rules`
+
+如果配置不符合当前用户目标，先说明冲突，并请求用户明确选择。不要把 `apply_to_database: true` 自动改成 `false`。
+
+不要把“生成表代码”擅自解释成“只跑 scaffold、不跑 SQL”。默认应按配置完整执行；只有用户明确排除 SQL / 落库时，才缩窄范围。
+
+### 数据库落库规则
+
+菜单/字典真实落库必须同时满足：
+
+- `codegen.apply_to_database=true`
+- 对应 SQL mode 为 `auto`
+- 生成计划判断存在需要创建或更新的数据
+
+`migration_only` 永远只生成或写入迁移文件，不写真实数据库，即使 `apply_to_database=true`。
+
+`disabled` 不生成对应 SQL，也不会落库。
+
+### 文件覆盖规则
+
+普通生成代码文件是“新建型文件”：
+
+- 默认 `overwrite=false`
+- 如果目标文件已存在，必须暂停并询问用户是否覆盖
+- 用户确认覆盖后，才用 `overwrite=true` 重试
+
+合并型文件是“修改型文件”，不要求目标文件必须不存在：
+
+- 前端 `src/utils/dict.ts` 字典常量
+- 后端 `ErrorCodeConstants.java` 错误码常量
+- 后续明确由 MCP 合并器处理的类似文件
+
+这些文件按 MCP 合并规则更新已有内容，不要按普通文件覆盖流程处理。
+
+### DO 主键规则
+
+生成 `*DO.java` 时，主键字段必须带 MyBatis-Plus `@TableId`。
+
+典型输出：
+
+```java
+@Schema(description = "编号")
+@TableId
+private Long id;
+```
+
+生成后检查：
+
+- `import com.baomidou.mybatisplus.annotation.TableId;` 存在。
+- 主键字段有 `@TableId`。
+- 非主键字段不能误加 `@TableId`。
+- `PageReqVO`、`RespVO`、`SaveReqVO` 等 VO 类不能出现 `@TableId`，否则可能导致编译问题。
+
+### 父菜单推断规则
+
+父菜单无法立即确定时，先推断，不要直接问用户。
+
+推断顺序：
+
+1. 查看 `inspect_codegen_context` 返回的 `menu_context.parent_menu_candidates`。
+2. 搜索已有 `system_menu` SQL。
+3. 按模块名、菜单名、路由 path、component、permission 前缀匹配。
+4. 如果有合理置信度，传 `parent_menu_id` 或 `parent_menu_name` 调用 SQL 工具。
+5. 只有多个候选都合理且无法区分时，才问用户。
+
+### 后端模块规则
+
+遇到 Maven `packaging=pom` 聚合模块时，不把 Java 代码写到聚合模块根目录。
+
+必须使用 MCP 推导出的目标：
+
+- `backend_project.codegen_target.module_dir_name`
+- `backend_project.codegen_target.package_module_name`
+
+如果用户指定嵌套模块，例如“模块 A -> B -> 新建模块”，传：
+
+- `module_name`：逻辑模块或根菜单模块，例如 `travel`
+- `backend_module_dir`：目标 Maven 模块路径，例如 `travel/sim-spu`
+- `backend_package_module`：Java package 模块段，例如 `simspu`
+
+写入前检查 `generated_file_plan` 是否包含目标模块的 `pom.xml`。
+
+## 常见处理方式
+
+### 只要代码，不要 SQL
+
+这是显式缩窄场景，不是默认场景。
+
+调用 `generate_codegen_scaffold`，跳过 `generate_codegen_sql`。
+
+不要为了“预览安全”调用 SQL 工具。
+
+### 只要 SQL 文件，不要落库
+
+如果配置当前允许落库，不要擅自改配置。
+
+应该向用户说明：
+
+- 当前配置会让 SQL 工具可能写库。
+- 若只要 SQL 文件，需要用户确认调整配置或 SQL mode。
+
+### 用户说“生成表代码”
+
+默认按完整生成链路理解，不要自动脑补成“只生成 Java/Vue 文件”。
+
+执行前先看两点：
+
+- 用户有没有明确排除 SQL、菜单、字典、落库
+- 当前配置是否要求 SQL 生成或真实落库
+
+如果用户没有明确排除，就按配置执行。
+
+### 目标文件已存在
+
+把 MCP 的 `next_action_prompt` 原样传达给用户。
+
+不要自行覆盖，不要静默跳过。
+
+### 表结构未解析
+
+先判断是否有数据库连接；有则优先查真实数据库。
+
+真实数据库没有目标表时，再看“目标表自己的迁移 SQL”能否解析字段。
+
+不要因为基准 `ruoyi-vue-pro.sql` 里没有新表就阻塞生成。
+
+如果数据库和目标表 SQL 都不可用，再让用户补充 SQL 或数据库配置。
+
+### 目标路径看起来不对
+
+暂停写入，检查：
+
+- `resolved_from_config`
+- `backend_project.codegen_target`
+- `generated_file_plan`
+- `projects.backend.path`
+- `projects.frontend`
+
+不要凭目录名或 Java package 猜真实落点。
+
+## 项目识别规则
+
+Yudao Pilot 通过文件指纹识别项目，不依赖目录名、根项目名、Maven `groupId`、Java base package。
+
+后端识别依据包括：
+
+- `pom.xml`
+- `modules`
+- `yudao-dependencies`
+- `yudao-framework`
+- `yudao-server` 或 `*-server`
+- `yudao-module-*`
+- `yudao-spring-boot-starter-*`
+- Spring Boot 2 / 3、Java 8 / 17、Cloud 依赖差异
+
+前端识别依据包括：
+
+- `package.json`
+- `element-plus`
+- `@vben/*`
+- `@dcloudio/uni-app`
+- `vite`
+- `pinia`
+- `vue-router`
+- monorepo apps，例如 `apps/web-antd`、`apps/web-ele`
+
+## 前端类型映射
+
+| 代码生成类型 | 前端项目 |
+| --- | --- |
+| `VUE3_ELEMENT_PLUS` | `yudao-ui-admin-vue3` |
+| `VUE3_VBEN5_ANTD_SCHEMA` | `yudao-ui-admin-vben` |
+| `VUE3_VBEN5_ANTD_GENERAL` | `yudao-ui-admin-vben` |
+| `VUE3_VBEN5_EP_SCHEMA` | `yudao-ui-admin-vben` |
+| `VUE3_VBEN5_EP_GENERAL` | `yudao-ui-admin-vben` |
+| `VUE3_ADMIN_UNIAPP_WOT` | `yudao-ui-admin-uniapp` |
+
+同一个 `yudao-ui-admin-vben` 路径可以配置多个不同前端类型。生成时按前端类型分别产出到对应子应用。
+
+## MCP Server 配置示例
+
+开发环境：
 
 ```json
 {
@@ -63,7 +391,7 @@ Development checkout:
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/woodynew/.codex/worktrees/1583/yudao-pilot-mcp",
+        "/path/to/yudao-pilot-mcp",
         "run",
         "yudao-pilot"
       ]
@@ -72,7 +400,7 @@ Development checkout:
 }
 ```
 
-Installed user environment:
+安装后环境：
 
 ```json
 {
@@ -84,122 +412,3 @@ Installed user environment:
   }
 }
 ```
-
-If the current MCP client has no `yudao-pilot` server configured, add it to the MCP client config first. Prefer the installed `yudao-pilot` command in normal user environments; use the development checkout path only for local development of this MCP package.
-
-## Required Workflow
-
-1. Treat the MCP client's current project root as the workspace root.
-2. Call `load_workspace_config` first.
-3. If the response has `error_code=workspace_root_required`, stop the current generation flow. Ask the user for the real project workspace directory, then retry the MCP call with that directory as `workspace_root`. Never continue with `/`, another filesystem root, or a directory where MCP detected no supported yudao projects as the workspace root.
-4. If the response has `error_code=config_initialized`, stop the current generation flow. Tell the user the YAML was created, list the detected backend/frontend paths from `config_summary`, and ask whether to continue or stop so they can manually review/edit `./.yudao-pilot/config.yaml`.
-5. If config exists, call `validate_workspace_projects`.
-6. For code generation, call `inspect_codegen_context` before generating files.
-7. If table schema is unresolved, stop and follow the MCP response: create/provide migration SQL or fix DB config before continuing.
-8. Preview generated output with `generate_codegen_scaffold(write_files=false)` unless the user explicitly requested direct writing.
-9. Only call write-enabled tools (`generate_codegen_scaffold(write_files=true)`, `generate_codegen_sql(write_files=true)`, `write_generated_files`, `write_mysql_migration`) when the target paths and generated content are clear.
-
-## Boundaries And Safety
-
-- Respect `./.yudao-pilot/config.yaml` as the routing source of truth.
-- If MCP cannot confirm the user's project workspace directory, ask the user for it and pass it explicitly as `workspace_root`; do not initialize YAML under the filesystem root or any directory with no detected yudao backend/frontend project.
-- Do not guess backend/frontend paths by directory names alone; rely on MCP project detection and validation.
-- For aggregator Maven modules with `packaging=pom`, do not write Java code into the aggregator itself. Use the MCP-generated backend target, which may select an existing child jar module or propose a new child module path.
-- If the user explicitly says to generate into a nested backend module such as `模块 A -> B -> 新建模块`, pass an explicit backend target instead of relying on inference:
-  - `module_name`: logical/root menu module, for example `travel`
-  - `backend_module_dir`: target Maven module path, for example `travel/sim-spu` or `yudao-module-travel/yudao-module-sim-spu`
-  - `backend_package_module`: Java package module segment, for example `simspu`
-  - For a new explicit nested module, check that the generated file plan includes `backend_module_dir/pom.xml` before writing files.
-- Do not write menu/dict SQL to a real database unless `codegen.apply_to_database=true`.
-- If MCP returns `should_stop=true`, pause the current generation and report the requested user decision.
-- If generated target paths look wrong, stop and inspect `resolved_from_config`, `backend_project.codegen_target`, and `generated_file_plan` before writing.
-
-## Common Tool Order
-
-For a typical table codegen request:
-
-```text
-load_workspace_config
-validate_workspace_projects
-resolve_database_config
-inspect_codegen_context(table_name)
-generate_codegen_sql(table_name, write_files=false)
-generate_codegen_scaffold(table_name, write_files=false)
-generate_codegen_sql(table_name, write_files=true)        # only after confirmation
-generate_codegen_scaffold(table_name, write_files=true)   # only after confirmation
-```
-
-Use `inspect_project_path` when the user asks whether a specific path is a supported yudao backend/frontend project.
-
-## Framework Detection
-
-Yudao Pilot detects project type by parsing file fingerprints (`pom.xml`, `package.json`), not by directory names, root project names, Maven `groupId` / `artifactId`, or Java base package names. Users commonly rename the business project and Java package, so those values must never be required signals.
-
-### Backend Detection
-
-Target repository: [YunaiV/ruoyi-vue-pro](https://github.com/YunaiV/ruoyi-vue-pro)
-
-Prerequisite: `pom.xml` exists at the project root.
-
-**Step 1: yudao fingerprint scoring (total score ≥ 5 required)**
-
-| Fingerprint | Score | Notes |
-|-------------|-------|-------|
-| Root `pom.xml` has `groupId=cn.iocoder.boot` + `artifactId=yudao` | +2 | Official root POM coordinates; optional evidence only |
-| Current POM is a backend startup module such as `yudao-server` or `*-server` | +2 | Supports renamed business server modules |
-| `modules` contains `yudao-dependencies`, `yudao-framework`, `yudao-server`, `yudao-module-system`, or `yudao-module-infra` | +1 each | Stable framework layout markers |
-| `modules` contains one or more `yudao-module-*` entries | +1 to +2 | Business/module layout marker |
-| `modules` contains both `yudao-framework` and `yudao-module-*` | +2 | Strong multi-module yudao layout signal |
-| `dependencyManagement` imports `cn.iocoder.boot:yudao-dependencies` | +3 | Strongest signal — BOM import |
-| Dependencies contain `yudao-spring-boot-starter-protection` | +2 | Core yudao security dependency |
-| Dependencies contain `yudao-module-system` | +1 | System module |
-| Dependencies contain `yudao-module-infra` | +1 | Infrastructure module |
-| `packaging=pom` | +1 | Aggregator module marker |
-
-Do not fail detection only because the root Maven coordinates were renamed, for example `com.example.safe:safe-voyage-parent`, or because the Java base package changed from `cn.iocoder.yudao` to a company-specific package.
-
-**Step 2: Distinguish three backend variants**
-
-| Type | Identification criteria |
-|------|------------------------|
-| `yudao-cloud` | Imports `spring-cloud-dependencies` / `spring-cloud-alibaba-dependencies`, or dependencies contain `spring-cloud-starter-*` (gateway, openfeign, nacos, sentinel, etc.), cloud score ≥ 2 |
-| `ruoyi-vue-pro-jdk17` | `spring.boot.version` is 3.x, `java.version` ≥ 17, dependencies contain Boot3-only packages (`mybatis-plus-spring-boot3-starter`, `knife4j-openapi3-jakarta-*`, etc.), boot3 score > boot2 score and ≥ 3 |
-| `ruoyi-vue-pro` | `spring.boot.version` is 2.x, `java.version` = 8, dependencies contain Boot2-only packages (`mybatis-plus-boot-starter`, `knife4j-openapi3-spring-boot-starter`, etc.), boot2 score ≥ 3 |
-
-**Typical root POM structure**:
-
-```xml
-<groupId>cn.iocoder.boot</groupId>
-<artifactId>yudao</artifactId>
-<packaging>pom</packaging>
-<modules>
-    <module>yudao-dependencies</module>
-    <module>yudao-framework</module>
-    <module>yudao-server</module>
-    <module>yudao-module-system</module>
-    <module>yudao-module-infra</module>
-    <!-- more yudao-module-* modules -->
-</modules>
-```
-
-### Frontend Detection
-
-Prerequisite: `package.json` exists at the project root.
-
-| Project type | Identification criteria |
-|-------------|------------------------|
-| `yudao-ui-admin-vue3` | Dependencies contain `element-plus` (+4), `vue` major version is 3 (+2), `@vitejs/plugin-vue` (+2), `vite` (+1), `pinia` + `vue-router` (+1), total score ≥ 4 |
-| `yudao-ui-admin-vben` | Dependencies contain `@vben/*` workspace packages (+4), scripts contain `turbo` (+2), devDependencies contain `workspace:*` (+1), total score ≥ 4 |
-| `yudao-ui-admin-uniapp` | Dependencies contain `@dcloudio/uni-app` (+4), multiple `@dcloudio/uni-*` packages (+2), devDependencies contain `@dcloudio/vite-plugin-uni` (+2), `@uni-helper/*` ecosystem (+1), total score ≥ 4 |
-
-### Frontend Codegen Type Mapping
-
-| Codegen template type | Frontend project |
-|-----------------------|-----------------|
-| `VUE3_ELEMENT_PLUS` | `yudao-ui-admin-vue3` |
-| `VUE3_VBEN5_ANTD_SCHEMA` / `ANTD_GENERAL` / `EP_SCHEMA` / `EP_GENERAL` | `yudao-ui-admin-vben` |
-| `VUE3_ADMIN_UNIAPP_WOT` | `yudao-ui-admin-uniapp` |
-
-### Auto Discovery
-
-`init_workspace_config` scans up to 3 directory levels deep from the workspace root to auto-detect and recommend backend and frontend project paths. It skips `.git`, `node_modules`, `target`, `.venv`, and other non-project directories.

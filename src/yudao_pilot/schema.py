@@ -29,97 +29,72 @@ def inspect_table_schema(
     database_config: dict[str, Any] | DatabaseConfig | None = None,
 ) -> dict[str, Any]:
     repo_root = resolve_backend_repo_root(backend_root)
-    sql_dump_path = resolve_mysql_schema_dump(repo_root)
     migration_sqls = find_table_migration_sqls(repo_root, table_name)
-    sql_message: str | None = None
-    if sql_dump_path is not None:
-        schema = parse_table_schema_from_sql(sql_dump_path, table_name)
-        if schema is not None:
-            schema["executed_migration_sqls"] = []
-            return schema
-        sql_message = "在 SQL 结构文件中未找到目标表"
-    else:
-        sql_message = "未找到 MySQL 结构文件"
-
     normalized_db_config = normalize_database_config(database_config)
     if normalized_db_config is not None:
         try:
             runtime_schema = parse_table_schema_from_database(normalized_db_config, table_name)
         except Exception as exc:
+            sql_fallback = resolve_local_table_schema(repo_root, table_name, migration_sqls=migration_sqls)
+            if sql_fallback is not None:
+                sql_fallback["database_name"] = normalized_db_config.database
+                sql_fallback["database_lookup_failed"] = True
+                sql_fallback["database_lookup_error"] = (
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+                sql_fallback["message"] = (
+                    f"真实数据库连接失败，已回退到本地 SQL 解析表字段："
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+                return sql_fallback
             return build_unresolved_schema(
                 table_name=table_name,
-                sql_dump_path=sql_dump_path,
+                sql_dump_path=None,
                 stop_reason="database_connection_required",
-                executed_migration_sqls=migration_sqls,
+                executed_migration_sqls=[],
                 message=(
-                    f"{sql_message}；无法连接数据库 {normalized_db_config.database}："
+                    f"无法连接数据库 {normalized_db_config.database}："
                     f"{exc.__class__.__name__}: {exc}。"
-                    f"{build_database_connection_hint(migration_sqls)}"
+                    f"{build_database_connection_hint(migration_sqls, include_migration_sqls=False)}"
                 ),
             )
         else:
             if runtime_schema is not None:
-                runtime_schema["sql_dump_path"] = str(sql_dump_path) if sql_dump_path else None
                 runtime_schema["executed_migration_sqls"] = []
                 return runtime_schema
-            if not migration_sqls:
-                return build_unresolved_schema(
-                    table_name=table_name,
-                    sql_dump_path=sql_dump_path,
-                    stop_reason="table_schema_missing",
-                    executed_migration_sqls=[],
-                    message=(
-                        f"{sql_message}；已尝试连接真实数据库 {normalized_db_config.database}，"
-                        f"但表不存在，且找不到匹配的迁移SQL，请先创建表后再继续。"
-                    ),
+            sql_fallback = resolve_local_table_schema(repo_root, table_name, migration_sqls=migration_sqls)
+            if sql_fallback is not None:
+                sql_fallback["database_name"] = normalized_db_config.database
+                sql_fallback["database_table_missing"] = True
+                sql_fallback["message"] = (
+                    "真实数据库未找到目标表，已回退到本地 SQL 解析表字段"
                 )
-
-            apply_result = apply_migration_sqls_to_database(
-                normalized_db_config,
-                migration_sqls,
-                table_name=table_name,
-            )
-            try:
-                runtime_schema = parse_table_schema_from_database(normalized_db_config, table_name)
-            except Exception as exc:
-                return build_unresolved_schema(
-                    table_name=table_name,
-                    sql_dump_path=sql_dump_path,
-                    stop_reason="database_connection_required",
-                    executed_migration_sqls=migration_sqls,
-                    message=(
-                        f"{sql_message}；已执行迁移SQL {format_migration_sqls(migration_sqls)}，"
-                        f"但回读数据库时连接失败：{exc.__class__.__name__}: {exc}。"
-                        "请配置数据库连接后重试。"
-                    ),
-                )
-            if runtime_schema is not None:
-                runtime_schema["sql_dump_path"] = str(sql_dump_path) if sql_dump_path else None
-                runtime_schema["executed_migration_sqls"] = [str(path) for path in migration_sqls]
-                runtime_schema["migration_sync"] = apply_result
-                runtime_schema["message"] = (
-                    f"已执行迁移SQL {format_migration_sqls(migration_sqls)} 创建目标表，"
-                    "并从真实数据库解析表字段"
-                )
-                return runtime_schema
+                return sql_fallback
             return build_unresolved_schema(
                 table_name=table_name,
-                sql_dump_path=sql_dump_path,
+                sql_dump_path=None,
                 stop_reason="table_schema_missing",
-                executed_migration_sqls=migration_sqls,
+                executed_migration_sqls=[],
                 message=(
-                    f"{sql_message}；已执行迁移SQL {format_migration_sqls(migration_sqls)}，"
-                    "但仍未找到目标表，请检查迁移SQL内容。"
+                    f"已尝试连接真实数据库 {normalized_db_config.database}，"
+                    "但表不存在，且本地也未找到目标表结构 SQL 或目标迁移SQL。"
                 ),
             )
-    else:
-        return build_unresolved_schema(
-            table_name=table_name,
-            sql_dump_path=sql_dump_path,
-            stop_reason="database_connection_required",
-            executed_migration_sqls=migration_sqls,
-            message=f"{sql_message}；未提供可用数据库连接。{build_database_connection_hint(migration_sqls)}",
-        )
+
+    sql_fallback = resolve_local_table_schema(repo_root, table_name, migration_sqls=migration_sqls)
+    if sql_fallback is not None:
+        return sql_fallback
+
+    return build_unresolved_schema(
+        table_name=table_name,
+        sql_dump_path=None,
+        stop_reason="database_connection_required",
+        executed_migration_sqls=[],
+        message=(
+            "未提供可用数据库连接，且本地未找到目标表结构 SQL 或目标迁移SQL。"
+            f"{build_database_connection_hint(migration_sqls)}"
+        ),
+    )
 
 
 def resolve_mysql_schema_dump(repo_root: Path) -> Path | None:
@@ -167,6 +142,31 @@ def parse_table_schema_from_sql(sql_dump_path: Path, table_name: str) -> dict[st
         "ai_component_hints": build_ai_component_hints(columns),
         "available_components": AVAILABLE_COMPONENTS,
     }
+
+
+def resolve_local_table_schema(
+    repo_root: Path,
+    table_name: str,
+    *,
+    migration_sqls: list[Path] | None = None,
+) -> dict[str, Any] | None:
+    migration_sqls = migration_sqls or find_table_migration_sqls(repo_root, table_name)
+    for migration_sql in migration_sqls:
+        schema = parse_table_schema_from_sql(migration_sql, table_name)
+        if schema is not None:
+            schema["schema_source"] = "migration-sql"
+            schema["message"] = "已从目标迁移 SQL 解析表字段"
+            schema["executed_migration_sqls"] = []
+            return schema
+
+    sql_dump_path = resolve_mysql_schema_dump(repo_root)
+    if sql_dump_path is None:
+        return None
+
+    schema = parse_table_schema_from_sql(sql_dump_path, table_name)
+    if schema is not None:
+        schema["executed_migration_sqls"] = []
+    return schema
 
 
 def normalize_database_config(
@@ -268,11 +268,15 @@ def build_unresolved_schema(
     }
 
 
-def build_database_connection_hint(migration_sqls: list[Path]) -> str:
-    if migration_sqls:
+def build_database_connection_hint(
+    migration_sqls: list[Path],
+    *,
+    include_migration_sqls: bool = True,
+) -> str:
+    if include_migration_sqls and migration_sqls:
         return (
-            f"已找到可执行的迁移SQL {format_migration_sqls(migration_sqls)}，"
-            "但当前无法执行，请配置数据库连接后重试。"
+            f"已找到目标迁移SQL {format_migration_sqls(migration_sqls)}，"
+            "如需优先以真实库为准，请配置数据库连接后重试。"
         )
     return "请配置数据库连接后重试。"
 

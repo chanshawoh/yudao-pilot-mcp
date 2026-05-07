@@ -1,10 +1,13 @@
 interface:
   display_name: "芋道代码生成 MCP"
-  short_description: "指导 AI 安全使用 Yudao Pilot MCP"
-  default_prompt: "使用 $yudao-pilot-mcp 检查我的芋道项目目录，并规划安全的代码生成。"
+  short_description: "根据表生成芋道前后端代码"
+  default_prompt: "使用 $yudao-pilot-mcp 根据数据库表生成芋道前后端代码、菜单和 SQL。"
 
 dependencies:
   tools:
     - type: "mcp"
       value: "yudao-pilot"
       description: "Yudao Pilot MCP server，用于芋道 / ruoyi-vue-pro 项目识别与代码生成"
+
+policy:
+  allow_implicit_invocation: true

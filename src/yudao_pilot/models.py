@@ -23,7 +23,8 @@ FrontendProjectType = Literal[
 ProjectKind = Literal["backend", "frontend", "unknown"]
 RoutingMode = Literal["auto", "ask", "manual"]
 DatabaseMode = Literal["auto", "manual"]
-# 菜单 / 字典 SQL：auto 写入迁移并可入库；migration_only 仅迁移文件；disabled 不生成对应 SQL
+# 菜单 / 字典 SQL：auto 写入迁移，且在 apply_to_database=true 时可入库；
+# migration_only 仅迁移文件；disabled 不生成对应 SQL
 SqlAssetMode = Literal["auto", "disabled", "migration_only"]
 TargetKind = Literal["backend", "frontend"]
 
@@ -121,7 +122,7 @@ class GeneratedFile(BaseModel):
     target_type: str
     relative_path: str
     content: str
-    overwrite: bool = True
+    overwrite: bool = False
 
 
 class WriteResult(BaseModel):
@@ -130,6 +131,9 @@ class WriteResult(BaseModel):
     path: str
     written: bool
     reason: str | None = None
+    error_code: str | None = None
+    should_stop: bool = False
+    next_action_prompt: str | None = None
 
 
 class WorkspaceContext(BaseModel):

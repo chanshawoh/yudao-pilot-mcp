@@ -92,13 +92,20 @@ def write_generated_files(
             continue
 
         if output_path.exists() and not generated_file.overwrite:
+            prompt = (
+                f"目标文件已存在：{output_path}。该文件属于必须不存在才能新建的代码生成文件，"
+                "请询问用户是否覆盖；如用户确认覆盖，请将该文件的 overwrite 设为 true 后重试。"
+            )
             results.append(
                 WriteResult(
                     target_kind=generated_file.target_kind,
                     target_type=generated_file.target_type,
                     path=str(output_path),
                     written=False,
-                    reason="文件已存在且 overwrite=false",
+                    reason="目标文件已存在，需要用户确认是否覆盖",
+                    error_code="generated_file_exists",
+                    should_stop=True,
+                    next_action_prompt=prompt,
                 )
             )
             continue

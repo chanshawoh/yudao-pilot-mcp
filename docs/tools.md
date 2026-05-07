@@ -13,7 +13,7 @@ load_workspace_config
 validate_workspace_projects
 ```
 
-生成代码前：
+生成代码前，安全模式建议先预览：
 
 ```text
 inspect_codegen_context
@@ -22,7 +22,7 @@ generate_codegen_scaffold(write_files=false)
 generate_codegen_sql(write_files=false)
 ```
 
-确认目标和内容后再写入：
+确认目标和内容后再写入；如果配置已经明确允许直接写入，也可以直接执行写入调用：
 
 ```text
 generate_codegen_scaffold(write_files=true)
@@ -30,6 +30,12 @@ generate_codegen_sql(write_files=true)
 write_generated_files
 write_mysql_migration
 ```
+
+菜单/字典是否写入真实数据库只按配置决定，不按“是否先预览”强制绑定：
+
+- 默认 `codegen.apply_to_database=false`，不写库。
+- 只有 `codegen.apply_to_database=true` 且对应 `menu_sql_mode` / `dict_sql_mode` 为 `auto` 时，才会写入数据库。
+- `migration_only` 只生成或写入迁移文件，不写真实数据库。
 
 ### 停止条件
 
@@ -119,7 +125,7 @@ load_workspace_config
 validate_workspace_projects
 ```
 
-Before generating code:
+Before generating code, safe mode recommends previewing first:
 
 ```text
 inspect_codegen_context
@@ -128,7 +134,7 @@ generate_codegen_scaffold(write_files=false)
 generate_codegen_sql(write_files=false)
 ```
 
-After targets and content are confirmed:
+After targets and content are confirmed, write files. If config explicitly allows direct writing, you can call the write path directly:
 
 ```text
 generate_codegen_scaffold(write_files=true)
@@ -136,6 +142,12 @@ generate_codegen_sql(write_files=true)
 write_generated_files
 write_mysql_migration
 ```
+
+Writes to a real database for menu/dictionary data are config-driven rather than forced by a preview step:
+
+- The default `codegen.apply_to_database=false` does not write to the DB.
+- DB writes only happen when `codegen.apply_to_database=true` and the matching `menu_sql_mode` / `dict_sql_mode` is `auto`.
+- `migration_only` only generates or writes migration files and never writes to the real DB.
 
 ### Stop Conditions
 

@@ -57,6 +57,84 @@ def test_backend_writer_skips_when_module_does_not_exist(repo_root: Path, tmp_pa
     assert result["results"][0]["reason"] == "目标后端模块不存在，拒绝创建新的模块结构"
 
 
+def test_backend_writer_requires_overwrite_confirmation_for_existing_generated_file(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    output_path = repo_root / "yudao-module-member/src/main/java/demo/Test.java"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("original", encoding="utf-8")
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {
+                    "path": str(repo_root),
+                    "type": "ruoyi-vue-pro-jdk17",
+                },
+                "frontend": [],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="backend",
+                target_type="ruoyi-vue-pro-jdk17",
+                relative_path="yudao-module-member/src/main/java/demo/Test.java",
+                content="new",
+            )
+        ],
+    )
+
+    assert result["ok"] is False
+    assert output_path.read_text(encoding="utf-8") == "original"
+    assert result["results"][0]["error_code"] == "generated_file_exists"
+    assert result["results"][0]["should_stop"] is True
+    assert "是否覆盖" in result["results"][0]["next_action_prompt"]
+
+
+def test_backend_writer_overwrites_existing_generated_file_when_confirmed(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    output_path = repo_root / "yudao-module-member/src/main/java/demo/Test.java"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("original", encoding="utf-8")
+    config = WorkspaceConfig.model_validate(
+        {
+            "projects": {
+                "backend": {
+                    "path": str(repo_root),
+                    "type": "ruoyi-vue-pro-jdk17",
+                },
+                "frontend": [],
+            },
+            "codegen": {"routing": {"mode": "auto"}},
+        }
+    )
+
+    result = write_generated_files(
+        tmp_path,
+        config,
+        [
+            GeneratedFile(
+                target_kind="backend",
+                target_type="ruoyi-vue-pro-jdk17",
+                relative_path="yudao-module-member/src/main/java/demo/Test.java",
+                content="new",
+                overwrite=True,
+            )
+        ],
+    )
+
+    assert result["ok"] is True
+    assert output_path.read_text(encoding="utf-8") == "new"
+
+
 def test_frontend_writer_merges_dict_type_constants(tmp_path: Path) -> None:
     frontend_root = tmp_path / "frontend"
     dict_file = frontend_root / "src" / "utils" / "dict.ts"

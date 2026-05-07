@@ -90,7 +90,8 @@
 - `projects.frontend` 中 `type` 不能重复
 - 同一个 `path` 可以出现多次，但每次必须对应不同的前端枚举
 - 只有配置中的前端项目才会参与生成
-- 文件已存在且 `overwrite=false` 时，跳过该文件
+- 普通生成文件已存在且 `overwrite=false` 时，返回 `should_stop`，由调用方询问是否覆盖
+- 字典常量等合并型文件按合并规则修改已有文件，不要求目标文件必须不存在
 - 生成计划与真实落盘都按前端项目类型分别执行
 
 ---
@@ -169,5 +170,6 @@ Generated artifacts:
 - `projects.frontend[].type` must be unique
 - The same `path` may appear more than once only when each entry uses a different frontend enum
 - Only configured frontend projects participate in generation
-- Existing files are skipped when `overwrite=false`
+- Existing ordinary generated files return `should_stop` when `overwrite=false`, so the caller can ask whether to overwrite
+- Merge-style files such as dictionary constants update existing files through merge rules and do not require the target file to be absent
 - Planning and writing are both executed per frontend type

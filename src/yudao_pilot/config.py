@@ -158,7 +158,8 @@ def default_config_template() -> str:
             # ask: MCP 返回候选位置，由 AI 询问用户后再继续
             # manual: 按 manual_rules 规则解析，不让用户每次重复确认
 
-          # 菜单 SQL：auto / migration_only 均生成迁移 SQL；disabled 不生成菜单 SQL
+          # 菜单 SQL：auto 生成迁移 SQL，且在 apply_to_database=true 时允许写库；
+          # migration_only 仅生成/写入迁移文件；disabled 不生成菜单 SQL
           menu_sql_mode: auto # auto | migration_only | disabled
           # 字典 SQL：同上
           dict_sql_mode: auto # auto | migration_only | disabled

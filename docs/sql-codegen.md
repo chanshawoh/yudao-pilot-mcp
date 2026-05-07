@@ -17,13 +17,15 @@ Yudao Pilot MCP 可以为代码生成流程补齐 SQL 产物：
 | 配置 | SQL 生成行为 | 数据库执行行为 |
 | --- | --- | --- |
 | `apply_to_database=false` | 仍生成菜单/字典迁移 SQL | 不写库 |
-| `apply_to_database=true` | 不影响 SQL 生成 | 可写库，已存在则跳过 |
+| `apply_to_database=true` | 不影响 SQL 生成 | 仅在对应 SQL mode 为 `auto` 时可写库，已存在则跳过 |
 | `menu_sql_mode=disabled` | 不生成菜单 SQL 片段 | 无菜单 SQL 可写 |
 | `dict_sql_mode=disabled` | 不生成字典 SQL 片段 | 无字典 SQL 可写 |
 | `menu_sql_mode=auto` | 生成菜单 SQL | 是否写库取决于 `apply_to_database` |
 | `dict_sql_mode=auto` | 生成字典 SQL | 是否写库取决于 `apply_to_database` |
+| `menu_sql_mode=migration_only` | 生成菜单迁移 SQL | 不写库 |
+| `dict_sql_mode=migration_only` | 生成字典迁移 SQL | 不写库 |
 
-`migration_only` 是兼容值，当前行为等同 `auto`：生成迁移 SQL，但是否写库仍只看 `apply_to_database`。
+默认安全模式是 `apply_to_database=false`。如果工作区配置明确设置 `apply_to_database=true` 且对应 SQL mode 为 `auto`，MCP 会按配置直接写入真实数据库；未明确配置时只准备 SQL 产物。
 
 ### 常用参数
 
@@ -87,13 +89,15 @@ Yudao Pilot MCP can generate SQL artifacts for the code-generation flow:
 | Config | SQL generation | Database execution |
 | --- | --- | --- |
 | `apply_to_database=false` | Still generates menu/dictionary migration SQL | Does not write to DB |
-| `apply_to_database=true` | Does not affect SQL generation | May write to DB, skips existing records |
+| `apply_to_database=true` | Does not affect SQL generation | May write to DB only when the matching SQL mode is `auto`; skips existing records |
 | `menu_sql_mode=disabled` | Omits menu SQL | No menu SQL to apply |
 | `dict_sql_mode=disabled` | Omits dictionary SQL | No dictionary SQL to apply |
 | `menu_sql_mode=auto` | Generates menu SQL | DB write depends on `apply_to_database` |
 | `dict_sql_mode=auto` | Generates dictionary SQL | DB write depends on `apply_to_database` |
+| `menu_sql_mode=migration_only` | Generates menu migration SQL | Does not write to DB |
+| `dict_sql_mode=migration_only` | Generates dictionary migration SQL | Does not write to DB |
 
-`migration_only` is a compatibility value and currently behaves like `auto` for generation. Database execution is still controlled by `apply_to_database`.
+The default safe mode is `apply_to_database=false`. If the workspace config explicitly sets `apply_to_database=true` and the matching SQL mode is `auto`, MCP writes directly to the real database; otherwise it only prepares SQL artifacts.
 
 ### Common Parameters
 

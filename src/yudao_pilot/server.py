@@ -402,7 +402,7 @@ def inspect_codegen_context_tool(
 def inspect_table_schema_tool(
     table_name: str, workspace_root: str | None = None
 ) -> dict[str, Any]:
-    """优先从后端仓库 SQL 结构文件解析字段，缺失时回退到真实数据库。"""
+    """优先从真实数据库解析字段，缺失时回退到目标迁移 SQL 或本地结构 SQL。"""
     loaded = load_config_or_error(workspace_root)
     if isinstance(loaded, dict):
         return loaded
@@ -433,12 +433,15 @@ def generate_codegen_scaffold_tool(
     include_backend: bool = True,
     include_frontend: bool = True,
     write_files: bool = False,
-    overwrite: bool = True,
+    overwrite: bool = False,
     field_overrides: dict[str, str] | None = None,
     backend_module_dir: str | None = None,
     backend_package_module: str | None = None,
 ) -> dict[str, Any]:
-    """根据当前上下文直接生成首版代码骨架，可选择只预览或直接写入工作区。
+    """根据当前上下文生成首版代码骨架，可选择只预览或直接写入工作区。
+
+    普通代码文件默认 overwrite=false，写入时若文件已存在会返回 should_stop，
+    由调用方询问用户是否覆盖；前端字典常量、后端错误码等合并型文件不受此限制。
 
     field_overrides: AI 覆盖字段组件类型，格式为 {"java_field": "html_type"}，
     例如 {"lng": "inputNumber", "lat": "inputNumber"}。
@@ -603,12 +606,12 @@ def generate_codegen_sql_tool(
     backend_module_dir: str | None = None,
     backend_package_module: str | None = None,
 ) -> dict[str, Any]:
-    """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件并执行菜单数据。
+    """生成 MySQL 菜单 SQL 与模块 H2 测试 SQL，可选直接写入文件，并按配置决定是否写库。
 
     菜单/字典是否生成由工作区配置 codegen.menu_sql_mode、codegen.dict_sql_mode 控制；
     是否允许写库由 codegen.apply_to_database 控制：
-    auto（默认）= 生成 SQL，write_files 写迁移；
-    migration_only = 兼容值，同样生成 SQL 并可写迁移文件；
+    auto（默认）= 生成 SQL，write_files 写迁移，若 apply_to_database=true 则允许写库；
+    migration_only = 仅生成/写入迁移文件，不执行真实数据库写入；
     disabled = 不生成对应 SQL（不写迁移中的该段）。
     backend_module_dir: 显式后端目标模块目录，支持 yudao-module-a/yudao-module-b 或 a/b。
     backend_package_module: 显式 Java package module 名，例如 b；未传时使用 module_name。
@@ -669,11 +672,13 @@ def generate_codegen_sql_tool(
     dict_generates_sql = not dict_plan.get("disabled")
     menu_needs_db = (
         apply_to_database
+        and menu_mode == "auto"
         and menu_generates_sql
         and not menu_plan.get("all_menus_exist", False)
     )
     dict_needs_db = (
         apply_to_database
+        and dict_mode == "auto"
         and dict_generates_sql
         and bool(dict_plan.get("has_dicts"))
         and not bool(dict_plan.get("all_complete", False))

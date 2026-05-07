@@ -11,7 +11,7 @@ from .models import GeneratedFile
 def generate_scaffold_files(
     context: dict[str, Any],
     *,
-    overwrite: bool = True,
+    overwrite: bool = False,
     include_backend: bool = True,
     include_frontend: bool = True,
 ) -> list[GeneratedFile]:
@@ -386,7 +386,7 @@ def render_data_object(relative_path: str, context: dict[str, Any]) -> str:
         *collect_java_type_imports(do_fields),
         f"{base_package}.framework.mybatis.core.dataobject.BaseDO",
     )
-    field_lines = "\n\n".join(render_java_field(field) for field in do_fields)
+    field_lines = "\n\n".join(render_do_field(field) for field in do_fields)
     return dedent(
         f"""\
 package {package_name};
@@ -2054,6 +2054,16 @@ def render_java_field(field: dict[str, Any]) -> str:
         f'    @Schema(description = "{desc}")\n'
         f'    private {java_type} {field["java_field"]};'
     )
+
+
+def render_do_field(field: dict[str, Any]) -> str:
+    java_type = normalize_java_field_type(field)
+    desc = escape_java_string(field["column_comment"])
+    lines = [f'    @Schema(description = "{desc}")']
+    if field.get("primary_key"):
+        lines.append("    @TableId")
+    lines.append(f'    private {java_type} {field["java_field"]};')
+    return "\n".join(lines)
 
 
 def render_save_vo_field(field: dict[str, Any]) -> str:

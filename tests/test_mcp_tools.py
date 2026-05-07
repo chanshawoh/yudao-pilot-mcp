@@ -30,6 +30,7 @@ from yudao_pilot.codegen import (
     resolve_backend_codegen_target,
     resolve_backend_business_name,
     resolve_frontend_codegen_targets,
+    write_mysql_migration,
 )
 from yudao_pilot.config import WorkspaceConfig
 from yudao_pilot.scaffold import (
@@ -187,7 +188,7 @@ def test_generate_codegen_scaffold_tool_stops_when_table_and_migration_are_missi
     assert "迁移SQL" in result["message"]
 
 
-def test_inspect_table_schema_tool_applies_migration_sql_and_reports_execution(
+def test_inspect_table_schema_tool_uses_migration_sql_without_database_execution(
     workspace_builder,
     tmp_path: Path,
     monkeypatch,
@@ -217,98 +218,27 @@ def test_inspect_table_schema_tool_applies_migration_sql_and_reports_execution(
 
     monkeypatch.setattr(schema_module, "resolve_mysql_schema_dump", lambda repo_root: None)
 
-    parsed_results = [
-        None,
-        {
-            "resolved": True,
-            "table_name": "missing_table",
-            "table_comment": "缺失表",
-            "sql_dump_path": None,
-            "schema_source": "database",
-            "database_name": "demo",
-            "message": "已从真实数据库解析表字段",
-            "columns": [
-                {
-                    "column_name": "id",
-                    "column_comment": "编号",
-                    "sql_type": "bigint",
-                    "raw_type": "bigint",
-                    "java_field": "id",
-                    "java_type": "Long",
-                    "ts_type": "number",
-                    "html_type": "input",
-                    "nullable": False,
-                    "primary_key": True,
-                    "auto_increment": False,
-                    "is_base_column": False,
-                    "in_do": True,
-                    "in_save": False,
-                    "in_resp": True,
-                    "in_list": True,
-                    "in_query": True,
-                }
-            ],
-        },
-    ]
+    parse_calls: list[str] = []
 
     def fake_parse_from_database(database_config, table_name):
-        return parsed_results.pop(0)
+        parse_calls.append(table_name)
+        return None
+
+    def fail_apply(*args, **kwargs):
+        raise AssertionError("inspect_table_schema must not execute local migration SQL")
 
     monkeypatch.setattr(schema_module, "parse_table_schema_from_database", fake_parse_from_database)
-
-    executed_sql: list[str] = []
-
-    class FakeCursor:
-        def execute(self, sql, params=None):
-            executed_sql.append(" ".join(sql.split()))
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    class FakeConnection:
-        def __init__(self) -> None:
-            self.committed = False
-            self.rolled_back = False
-
-        def cursor(self):
-            return FakeCursor()
-
-        def commit(self):
-            self.committed = True
-
-        def rollback(self):
-            self.rolled_back = True
-
-        def close(self):
-            pass
-
-    fake_connection = FakeConnection()
-
-    class FakePyMySQL:
-        class cursors:
-            DictCursor = object
-
-        @staticmethod
-        def connect(**kwargs):
-            return fake_connection
-
-    monkeypatch.setitem(sys.modules, "pymysql", FakePyMySQL)
+    monkeypatch.setattr(schema_module, "apply_migration_sqls_to_database", fail_apply)
 
     result = inspect_table_schema_tool("missing_table", str(workspace_root))
 
     assert result["ok"] is True
-    assert fake_connection.committed is True
-    assert fake_connection.rolled_back is False
-    assert any("CREATE TABLE `missing_table`" in sql for sql in executed_sql)
-    assert not any("CREATE TABLE `unrelated_table`" in sql for sql in executed_sql)
-    assert result["data"]["executed_migration_sqls"] == [
-        str(backend_root / "sql" / "mysql" / "migrations" / migration_filename)
-    ]
-    assert result["data"]["migration_sync"]["statement_count"] == 1
-    assert migration_filename in result["data"]["message"]
+    assert parse_calls == ["missing_table"]
+    assert result["data"]["schema_source"] == "migration-sql"
+    assert result["data"]["database_table_missing"] is True
+    assert result["data"]["executed_migration_sqls"] == []
+    assert result["data"]["sql_dump_path"].endswith(migration_filename)
+    assert any(column["column_name"] == "id" for column in result["data"]["columns"])
 
 
 def test_infer_merchant_user_from_manual_rules(workspace_builder) -> None:
@@ -675,6 +605,46 @@ def test_scaffold_includes_vue3_dict_type_constant_update_file() -> None:
     assert "来源类型" in dict_file.content
 
 
+def test_scaffold_marks_new_code_files_as_non_overwrite_by_default() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_spu",
+        module_name="travel",
+        business_name="sim_spu",
+        entity_name="TravelSimSpu",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[
+            {
+                "project_type": "VUE3_ELEMENT_PLUS",
+                "default_front_type": 20,
+                "default_front_type_label": "Vue3 Element Plus",
+                "ambiguous": False,
+            }
+        ],
+        unit_test_enable=False,
+    )
+    context = {
+        "table_name": "travel_sim_spu",
+        "module_name": "travel",
+        "business_name": "sim_spu",
+        "entity_name": "TravelSimSpu",
+        "menu_name": "仿真商品",
+        "permission_prefix": "travel:sim-spu",
+        "backend_project": {
+            "type": "ruoyi-vue-pro-jdk17",
+            "codegen_target": plan["backend_target"],
+        },
+        "backend_codegen_defaults": {"base_package": "cn.iocoder.yudao"},
+        "table_schema": {"columns": []},
+        "generated_file_plan": plan,
+    }
+
+    files = generate_scaffold_files(context)
+    ordinary_files = [file for file in files if file.relative_path != "src/utils/dict.ts"]
+
+    assert ordinary_files
+    assert all(file.overwrite is False for file in ordinary_files)
+
+
 def test_backend_business_name_removes_underscores() -> None:
     assert normalize_backend_business_name("sim_spu") == "simspu"
     assert normalize_backend_business_name("hotel/room_type") == "hotel/roomtype"
@@ -829,6 +799,93 @@ def test_generate_codegen_scaffold_uses_business_name_for_controller_route(
 
     assert '@RequestMapping("/hotel/brand")' in controller_java["content"]
     assert '@RequestMapping("/hotel/hotel-brand")' not in controller_java["content"]
+
+
+def test_generate_codegen_scaffold_adds_table_id_to_primary_key_do_field(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder(
+        frontend_types=("VUE3_ELEMENT_PLUS",),
+        manual_rules_yaml="""
+- module: travel
+  table_prefixes:
+    - travel_sim
+  table_rules:
+    - table: travel_sim_sku
+      business: sim_sku
+      entity: TravelSimSku
+""".strip(),
+    )
+    fake_schema = {
+        "resolved": True,
+        "table_name": "travel_sim_sku",
+        "table_comment": "旅游手机卡 SKU",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+            {
+                "column_name": "sku_name",
+                "column_comment": "SKU 名称",
+                "sql_type": "varchar",
+                "raw_type": "varchar(64)",
+                "java_field": "skuName",
+                "java_type": "String",
+                "ts_type": "string",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": False,
+                "auto_increment": False,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": True,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    result = generate_codegen_scaffold_tool("travel_sim_sku", str(workspace_root))
+
+    assert result["ok"] is True
+    data_object = next(
+        item
+        for item in result["data"]["generated_files"]
+        if item["relative_path"].endswith("dal/dataobject/simsku/TravelSimSkuDO.java")
+    )
+
+    assert "import com.baomidou.mybatisplus.annotation.TableId;" in data_object["content"]
+    assert (
+        '    @Schema(description = "编号")\n'
+        "    @TableId\n"
+        "    private Long id;"
+    ) in data_object["content"]
+    assert "@TableId\n    private String skuName;" not in data_object["content"]
+
+    for item in result["data"]["generated_files"]:
+        if item["relative_path"].endswith(("PageReqVO.java", "RespVO.java", "SaveReqVO.java")):
+            assert "@TableId" not in item["content"]
 
 
 def test_generate_codegen_scaffold_adds_controller_permissions_and_swagger_annotations(
@@ -2041,7 +2098,7 @@ def test_generate_codegen_sql_tool_defaults_to_skip_database_apply_by_config(
     assert len(apply_calls) == 0
 
 
-def test_generate_codegen_sql_tool_applies_when_config_enabled_even_in_migration_only_mode(
+def test_generate_codegen_sql_tool_skips_database_apply_in_migration_only_mode(
     workspace_builder, monkeypatch
 ) -> None:
     workspace_root = workspace_builder()
@@ -2049,6 +2106,80 @@ def test_generate_codegen_sql_tool_applies_when_config_enabled_even_in_migration
     raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     raw_config["codegen"]["apply_to_database"] = True
     raw_config["codegen"]["menu_sql_mode"] = "migration_only"
+    config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    fake_schema = {
+        "resolved": True,
+        "table_name": "member_user",
+        "table_comment": "会员用户",
+        "schema_source": "database",
+        "message": "已模拟解析表结构",
+        "columns": [
+            {
+                "column_name": "id",
+                "column_comment": "编号",
+                "sql_type": "bigint",
+                "raw_type": "bigint",
+                "java_field": "id",
+                "java_type": "Long",
+                "ts_type": "number",
+                "html_type": "input",
+                "nullable": False,
+                "primary_key": True,
+                "auto_increment": True,
+                "is_base_column": False,
+                "in_do": True,
+                "in_save": False,
+                "in_resp": True,
+                "in_list": True,
+                "in_query": True,
+            },
+        ],
+    }
+    monkeypatch.setattr(schema_module, "inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+    monkeypatch.setattr(
+        "yudao_pilot.server.resolve_database_config",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "database": {
+                "host": "127.0.0.1",
+                "port": 3306,
+                "database": "demo",
+                "username": "root",
+                "password": "123456",
+            },
+            "message": "ok",
+        },
+    )
+
+    apply_calls: list[dict[str, object]] = []
+
+    def fake_apply_menu(database_config, menu_plan):
+        apply_calls.append({"database": database_config, "menu_plan": menu_plan})
+        return {"ok": True, "created": [], "updated": [], "skipped": []}
+
+    monkeypatch.setattr("yudao_pilot.server.apply_menu_plan_to_database", fake_apply_menu)
+
+    result = generate_codegen_sql_tool("member_user", str(workspace_root))
+
+    assert result["ok"] is True
+    assert result["data"]["context"]["codegen_sql"]["apply_to_database"] is True
+    assert result["data"]["apply_result"]["skipped_reason"] == "no_database_apply_needed"
+    assert len(apply_calls) == 0
+
+
+def test_generate_codegen_sql_tool_applies_when_config_enabled_and_auto_mode(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+    config_path = workspace_root / ".yudao-pilot" / "config.yaml"
+    raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw_config["codegen"]["apply_to_database"] = True
+    raw_config["codegen"]["menu_sql_mode"] = "auto"
     config_path.write_text(
         yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
@@ -2279,6 +2410,38 @@ def test_resolve_h2_sql_plan_auto_creates_missing_module_sql_files(tmp_path: Pat
     assert "已自动创建基础文件" in result["message"]
     assert (module_root / "src/test/resources/sql/create_tables.sql").exists()
     assert (module_root / "src/test/resources/sql/clean.sql").exists()
+
+
+def test_write_mysql_migration_reuses_existing_logical_migration(tmp_path: Path) -> None:
+    backend_root = tmp_path / "backend"
+    migration_dir = backend_root / "sql" / "mysql" / "migrations"
+    migration_dir.mkdir(parents=True)
+    existing_path = migration_dir / "2026_05_07_101010_add_travel_sim_sku_menus.sql"
+    existing_path.write_text("-- existing\nSELECT 1;\n", encoding="utf-8")
+
+    first = write_mysql_migration(
+        backend_root,
+        "add_travel_sim_sku_menus",
+        "SELECT 2;",
+    )
+    content_after_first_write = existing_path.read_text(encoding="utf-8")
+    second = write_mysql_migration(
+        backend_root,
+        "add_travel_sim_sku_menus",
+        "SELECT 3;",
+        overwrite=True,
+    )
+
+    migration_files = sorted(migration_dir.glob("*_add_travel_sim_sku_menus.sql"))
+    assert len(migration_files) == 1
+    assert first["ok"] is True
+    assert first["written"] is False
+    assert first["path"] == str(existing_path)
+    assert content_after_first_write == "-- existing\nSELECT 1;\n"
+    assert second["ok"] is True
+    assert second["written"] is True
+    assert second["path"] == str(existing_path)
+    assert "SELECT 3;" in existing_path.read_text(encoding="utf-8")
 
 
 def test_generate_codegen_sql_tool_continues_database_apply_when_file_write_fails(
