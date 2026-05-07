@@ -661,7 +661,7 @@ def test_backend_business_name_strips_module_prefix_by_default() -> None:
         business_name="sim_spu",
         table_name="sim_spu",
         preserve_business_name=True,
-    ) == "simspu"
+    ) == "spu"
 
 
 def test_generated_backend_paths_use_compact_business_name() -> None:
@@ -695,6 +695,24 @@ def test_generated_backend_paths_strip_module_prefix_from_business_name() -> Non
     assert plan["backend_business_name"] == "spu"
     assert any("/controller/admin/spu/" in path for path in plan["backend"])
     assert not any("/controller/admin/simspu/" in path for path in plan["backend"])
+
+
+def test_generated_backend_paths_strip_package_module_prefix_from_preserved_business_name() -> None:
+    plan = build_generated_file_plan(
+        table_name="travel_sim_sku",
+        module_name="sim",
+        business_name="sim_sku",
+        entity_name="TravelSimSku",
+        base_package="cn.iocoder.yudao",
+        frontend_targets=[],
+        unit_test_enable=False,
+        preserve_business_name=True,
+    )
+
+    assert plan["backend_business_name"] == "sku"
+    assert any("/controller/admin/sku/" in path for path in plan["backend"])
+    assert any("/dal/dataobject/sku/" in path for path in plan["backend"])
+    assert not any("/controller/admin/simsku/" in path for path in plan["backend"])
 
 
 def test_rendered_backend_and_frontend_use_split_business_names() -> None:
@@ -3417,6 +3435,46 @@ def test_codegen_context_accepts_explicit_backend_module_target(
         )
         for path in context["generated_file_plan"]["backend"]
     )
+
+
+def test_codegen_context_strips_package_module_prefix_from_backend_business_name(
+    workspace_builder,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = workspace_builder()
+    backend_root = _create_fake_backend(tmp_path)
+    _rewrite_backend_path(workspace_root, backend_root)
+    fake_schema = {
+        "resolved": True,
+        "table_name": "travel_sim_sku",
+        "table_comment": "旅游手机卡 SKU",
+        "columns": [],
+    }
+    monkeypatch.setattr("yudao_pilot.codegen.inspect_table_schema", lambda *args, **kwargs: fake_schema)
+
+    from yudao_pilot.config import load_workspace_config
+
+    context = build_codegen_context(
+        workspace_root,
+        load_workspace_config(workspace_root),
+        "travel_sim_sku",
+        module_name="travel",
+        business_name="sim_sku",
+        entity_name="TravelSimSku",
+        backend_module_dir="travel/sim",
+        backend_package_module="sim",
+        preserve_business_name=True,
+    )
+
+    target = context["backend_project"]["codegen_target"]
+    assert target["package_module_name"] == "sim"
+    assert context["module_name"] == "sim"
+    assert context["configured_module_name"] == "travel"
+    assert context["backend_business_name"] == "sku"
+    assert any("/controller/admin/sku/" in path for path in context["generated_file_plan"]["backend"])
+    assert any("/dal/dataobject/sku/" in path for path in context["generated_file_plan"]["backend"])
+    assert not any("/controller/admin/simsku/" in path for path in context["generated_file_plan"]["backend"])
 
 
 def test_scaffold_includes_pom_for_missing_explicit_nested_backend_module(tmp_path: Path) -> None:

@@ -1094,10 +1094,21 @@ def resolve_backend_business_name(
     preserve_business_name: bool = False,
 ) -> str:
     normalized = normalize_backend_business_name(business_name) or normalize_backend_business_name(table_name)
-    if preserve_business_name:
-        return normalized
-
     module_prefix = normalize_backend_business_name(module_name)
+    if preserve_business_name:
+        return strip_backend_business_module_prefix(normalized, module_prefix) or normalized
+
+    return strip_backend_business_module_prefix(normalized, module_prefix) or normalized
+
+
+def strip_backend_business_module_prefix(business_name: str, module_prefix: str) -> str:
+    if not module_prefix:
+        return business_name
+    if "/" in business_name:
+        segments = business_name.split("/")
+        leaf = strip_backend_business_module_prefix(segments[-1], module_prefix)
+        return "/".join(segments[:-1] + [leaf])
+    normalized = business_name
     if module_prefix and normalized.startswith(module_prefix) and len(normalized) > len(module_prefix):
         return normalized[len(module_prefix):]
     return normalized
