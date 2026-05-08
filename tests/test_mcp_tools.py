@@ -36,11 +36,14 @@ from yudao_pilot.config import WorkspaceConfig
 from yudao_pilot.scaffold import (
     generate_scaffold_files,
     render_backend_file,
+    render_vue3_form_item,
+    render_vue3_query_item,
     render_frontend_file,
+    build_vue3_dict_import_line,
     render_vue3_dict_options_expr,
     render_vue3_dict_type_expr,
 )
-from yudao_pilot.sql_codegen import merge_sql_snippet, resolve_h2_sql_plan
+from yudao_pilot.sql_codegen import build_dict_plan, merge_sql_snippet, resolve_h2_sql_plan
 
 
 def _rewrite_backend_path(workspace_root: Path, backend_path: Path) -> None:
@@ -556,6 +559,91 @@ def test_vue3_generated_dict_uses_dict_type_constant() -> None:
     assert "'sim_spu_source_type'" not in render_vue3_dict_options_expr(field)
 
 
+def test_vue3_dict_import_line_only_imports_used_helpers() -> None:
+    option_fields = [
+        {
+            "java_field": "status",
+            "column_comment": "状态",
+            "java_type": "Integer",
+            "ts_type": "number",
+            "html_type": "select",
+            "generated_dict_type": "travel_sim_status",
+        },
+        {
+            "java_field": "specType",
+            "column_comment": "规格类型",
+            "java_type": "Boolean",
+            "ts_type": "boolean",
+            "html_type": "select",
+            "generated_dict_type": "travel_sim_spec_type",
+        },
+    ]
+    type_fields = option_fields + [
+        {
+            "java_field": "cardType",
+            "column_comment": "卡类型",
+            "java_type": "Integer",
+            "ts_type": "number",
+            "html_type": "input",
+            "generated_dict_type": "travel_sim_card_type",
+        }
+    ]
+
+    line = build_vue3_dict_import_line(option_fields, type_fields)
+
+    assert line == "import { getIntDictOptions, getBoolDictOptions, DICT_TYPE } from '@/utils/dict'"
+    assert "getStrDictOptions" not in line
+
+
+def test_vue3_empty_select_control_is_self_closing() -> None:
+    field = {
+        "java_field": "cancelType",
+        "column_comment": "取消类型",
+        "java_type": "Integer",
+        "ts_type": "number",
+        "html_type": "select",
+        "nullable": True,
+    }
+
+    content = render_vue3_form_item(field)
+
+    assert '<el-select v-model="formData.cancelType" placeholder="请选择取消类型" clearable class="!w-240px" />' in content
+    assert "</el-select>" not in content
+
+
+def test_vue3_empty_radio_group_is_self_closing() -> None:
+    field = {
+        "java_field": "beforeStatus",
+        "column_comment": "操作前状态",
+        "java_type": "Integer",
+        "ts_type": "number",
+        "html_type": "radio",
+        "nullable": True,
+    }
+
+    content = render_vue3_form_item(field)
+
+    assert '<el-radio-group v-model="formData.beforeStatus" />' in content
+    assert "</el-radio-group>" not in content
+
+
+def test_vue3_query_select_without_dict_keeps_all_option() -> None:
+    field = {
+        "java_field": "networkType",
+        "column_comment": "网络类型",
+        "java_type": "String",
+        "ts_type": "string",
+        "html_type": "select",
+        "nullable": True,
+        "in_query": True,
+    }
+
+    content = render_vue3_query_item(field)
+
+    assert '<el-option label="全部" value="" />' in content
+    assert "</el-select>" in content
+
+
 def test_scaffold_includes_vue3_dict_type_constant_update_file() -> None:
     plan = build_generated_file_plan(
         table_name="travel_sim_spu",
@@ -603,6 +691,93 @@ def test_scaffold_includes_vue3_dict_type_constant_update_file() -> None:
 
     assert "SIM_SPU_SOURCE_TYPE = 'sim_spu_source_type'" in dict_file.content
     assert "来源类型" in dict_file.content
+
+
+def test_build_dict_plan_reuses_common_status_from_existing_catalog() -> None:
+    context = {
+        "table_name": "hotel_brand",
+        "table_schema": {
+            "table_comment": "酒店品牌",
+            "columns": [
+                {
+                    "column_name": "status",
+                    "column_comment": "状态: 0-开启, 1-禁用",
+                    "java_field": "status",
+                    "ts_type": "number",
+                    "primary_key": False,
+                    "is_base_column": False,
+                }
+            ],
+        },
+    }
+
+    result = build_dict_plan(
+        context,
+        database_dict_catalog={
+            "dict_types": {
+                "common_status": {
+                    "id": 1,
+                    "name": "通用状态",
+                    "type": "common_status",
+                }
+            },
+            "dict_data": {
+                "common_status": [
+                    {"id": 11, "sort": 0, "label": "开启", "value": "0", "dict_type": "common_status"},
+                    {"id": 12, "sort": 1, "label": "禁用", "value": "1", "dict_type": "common_status"},
+                ]
+            },
+        },
+    )
+
+    assert result["catalog_source"] == "database"
+    assert result["dict_types"][0]["dict_type"] == "common_status"
+    assert result["dict_types"][0]["reuse_existing"] is True
+    assert result["dict_types"][0]["all_complete"] is True
+    assert result["dict_types"][0]["reuse_match"]["match_kind"] == "known_public_dict"
+
+
+def test_build_dict_plan_exposes_ai_candidate_matches() -> None:
+    context = {
+        "table_name": "travel_sim_sku",
+        "table_schema": {
+            "table_comment": "旅游手机卡 SKU",
+            "columns": [
+                {
+                    "column_name": "card_type",
+                    "column_comment": "卡类型: 1-实物SIM卡, 2-eSIM流量包",
+                    "java_field": "cardType",
+                    "ts_type": "number",
+                    "primary_key": False,
+                    "is_base_column": False,
+                }
+            ],
+        },
+    }
+
+    result = build_dict_plan(
+        context,
+        database_dict_catalog={
+            "dict_types": {
+                "travel_card_type": {
+                    "id": 2,
+                    "name": "卡类型",
+                    "type": "travel_card_type",
+                }
+            },
+            "dict_data": {
+                "travel_card_type": [
+                    {"id": 21, "sort": 0, "label": "实物SIM卡", "value": "1", "dict_type": "travel_card_type"},
+                    {"id": 22, "sort": 1, "label": "eSIM流量包", "value": "2", "dict_type": "travel_card_type"},
+                ]
+            },
+        },
+    )
+
+    assert result["ai_assist"]["available"] is True
+    assert result["dict_types"][0]["candidate_matches"]
+    assert result["dict_types"][0]["candidate_matches"][0]["dict_type"] == "travel_card_type"
+    assert result["dict_types"][0]["reuse_existing"] is True
 
 
 def test_scaffold_marks_new_code_files_as_non_overwrite_by_default() -> None:

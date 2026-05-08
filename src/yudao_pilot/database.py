@@ -521,6 +521,81 @@ def apply_dict_plan_to_database(
     }
 
 
+def load_dict_catalog_from_database(
+    database_config: dict[str, Any] | DatabaseConfig,
+) -> dict[str, Any]:
+    """Read active system dictionary types and data from the configured database."""
+    config = (
+        database_config
+        if isinstance(database_config, DatabaseConfig)
+        else DatabaseConfig.model_validate(database_config)
+    )
+    pymysql = import_pymysql()
+    connection = pymysql.connect(
+        host=config.host,
+        port=config.port,
+        user=config.username,
+        password=config.password,
+        database=config.database,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True,
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, name, type
+                FROM system_dict_type
+                WHERE deleted = b'0'
+                ORDER BY id ASC
+                """
+            )
+            type_rows = cursor.fetchall() or []
+            cursor.execute(
+                """
+                SELECT id, sort, label, value, dict_type
+                FROM system_dict_data
+                WHERE deleted = b'0'
+                ORDER BY dict_type ASC, sort ASC, id ASC
+                """
+            )
+            data_rows = cursor.fetchall() or []
+    finally:
+        connection.close()
+
+    types: dict[str, dict[str, Any]] = {}
+    for row in type_rows:
+        type_key = str(row.get("type") or "")
+        if not type_key:
+            continue
+        types[type_key] = {
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "type": type_key,
+        }
+
+    data: dict[str, list[dict[str, Any]]] = {}
+    for row in data_rows:
+        type_key = str(row.get("dict_type") or "")
+        if not type_key:
+            continue
+        data.setdefault(type_key, []).append({
+            "id": row.get("id"),
+            "sort": row.get("sort"),
+            "label": row.get("label"),
+            "value": row.get("value"),
+            "dict_type": type_key,
+        })
+
+    return {
+        "ok": True,
+        "database": config.database,
+        "dict_types": types,
+        "dict_data": data,
+    }
+
+
 def sync_existing_root_menu(cursor: Any, existing: dict[str, Any], menu: dict[str, Any]) -> str:
     updates: list[str] = []
     params: list[Any] = []

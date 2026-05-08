@@ -34,6 +34,25 @@ BUSINESS_NAME_HINTS: dict[str, str] = {
     "sim": "手机卡",
 }
 
+KNOWN_PUBLIC_DICT_TYPES: dict[str, dict[str, Any]] = {
+    "status": {
+        "dict_type": "common_status",
+        "constant_name": "COMMON_STATUS",
+        "dict_name": "通用状态",
+        "labels": {"开启", "启用", "正常"},
+        "values": {"0", "1"},
+        "reason": "字段名为 status，复用芋道内置通用状态字典",
+    },
+    "sex": {
+        "dict_type": "system_user_sex",
+        "constant_name": "SYSTEM_USER_SEX",
+        "dict_name": "用户性别",
+        "labels": {"男", "女", "未知"},
+        "values": {"0", "1", "2"},
+        "reason": "字段名表示性别，复用芋道内置用户性别字典",
+    },
+}
+
 
 def _disabled_menu_plan_stub(context: dict[str, Any]) -> dict[str, Any]:
     """Minimal menu_plan for H2 markers and tooling when menu SQL is disabled."""
@@ -66,6 +85,7 @@ def build_codegen_sql_bundle(
     menu_name: str | None = None,
     menu_icon: str | None = None,
     module_menu_icon: str | None = None,
+    database_dict_catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     table_schema = context.get("table_schema") or {}
     if not table_schema.get("resolved"):
@@ -105,7 +125,11 @@ def build_codegen_sql_bundle(
         dict_plan = _disabled_dict_plan_stub()
         dict_sql = ""
     else:
-        dict_plan = build_dict_plan(context, sql_dump_path=sql_dump_path)
+        dict_plan = build_dict_plan(
+            context,
+            sql_dump_path=sql_dump_path,
+            database_dict_catalog=database_dict_catalog,
+        )
         dict_sql = render_dict_migration_sql(dict_plan) if dict_plan.get("has_dicts") else ""
 
     parts = [p for p in (menu_sql.strip(), dict_sql.strip()) if p]
@@ -963,6 +987,7 @@ def escape_sql_string(value: str) -> str:
 def build_dict_plan(
     context: dict[str, Any],
     sql_dump_path: Path | None = None,
+    database_dict_catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a dict data generation plan by parsing column comments for enum patterns."""
     table_schema = context.get("table_schema") or {}
@@ -981,12 +1006,31 @@ def build_dict_plan(
 
     existing_types: dict[str, dict[str, Any]] = {}
     existing_data: dict[str, list[dict[str, Any]]] = {}
+    catalog_source = "none"
+    if database_dict_catalog:
+        existing_types = dict(database_dict_catalog.get("dict_types") or {})
+        existing_data = dict(database_dict_catalog.get("dict_data") or {})
+        catalog_source = "database"
     if sql_dump_path and Path(sql_dump_path).exists():
-        existing_types = load_dict_types_from_sql(Path(sql_dump_path))
-        existing_data = load_dict_data_from_sql(Path(sql_dump_path))
+        sql_types = load_dict_types_from_sql(Path(sql_dump_path))
+        sql_data = load_dict_data_from_sql(Path(sql_dump_path))
+        existing_types = {**sql_types, **existing_types}
+        existing_data = {**sql_data, **existing_data}
+        if catalog_source == "none":
+            catalog_source = "sql_dump"
+        elif sql_types or sql_data:
+            catalog_source = "database+sql_dump"
 
     dict_types: list[dict[str, Any]] = []
     for field in dict_fields:
+        reuse_match = resolve_reusable_dict_match(field, existing_types, existing_data)
+        if reuse_match:
+            field["original_dict_type"] = field["dict_type"]
+            field["dict_type"] = reuse_match["dict_type"]
+            field["dict_name"] = reuse_match.get("dict_name") or field["dict_name"]
+            field["reuse_existing"] = True
+            field["reuse_match"] = reuse_match
+
         dt_key = field["dict_type"]
         type_exists = dt_key in existing_types
         existing_items = existing_data.get(dt_key, [])
@@ -1003,6 +1047,10 @@ def build_dict_plan(
             "column_name": field["column_name"],
             "java_field": field["java_field"],
             "ts_type": field["ts_type"],
+            "reuse_existing": bool(field.get("reuse_existing")),
+            "reuse_match": field.get("reuse_match"),
+            "original_dict_type": field.get("original_dict_type"),
+            "candidate_matches": rank_reusable_dict_candidates(field, existing_types, existing_data)[:5],
             "type_exists": type_exists,
             "items": field["items"],
             "existing_items": existing_items,
@@ -1018,9 +1066,148 @@ def build_dict_plan(
         "ok": True,
         "has_dicts": True,
         "all_complete": all_complete,
+        "catalog_source": catalog_source,
+        "ai_assist": {
+            "available": True,
+            "purpose": "候选匹配结果可交给 AI 工具判断是否应复用公共字典",
+        },
         "message": "所有字典数据已存在且完整" if all_complete else "检测到需要生成的字典数据",
         "dict_types": dict_types,
     }
+
+
+def resolve_reusable_dict_match(
+    field: dict[str, Any],
+    existing_types: dict[str, dict[str, Any]],
+    existing_data: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any] | None:
+    known = infer_known_public_dict(field)
+    if known and known["dict_type"] in existing_types:
+        return known
+
+    candidates = rank_reusable_dict_candidates(field, existing_types, existing_data)
+    if not candidates:
+        return None
+    best = candidates[0]
+    if best["score"] < 85:
+        return None
+    if best["value_overlap"] < 1.0:
+        return None
+    return best
+
+
+def infer_known_public_dict(field: dict[str, Any]) -> dict[str, Any] | None:
+    java_field = str(field.get("java_field") or "")
+    column_name = str(field.get("column_name") or "")
+    field_names = {java_field, column_name, normalize_snake_case(java_field), column_name.lower()}
+    field_labels = {str(item.get("label") or "") for item in field.get("items") or []}
+    field_values = {str(item.get("value") or "") for item in field.get("items") or []}
+
+    for key, meta in KNOWN_PUBLIC_DICT_TYPES.items():
+        if key == "status":
+            name_matches = "status" in field_names
+        elif key == "sex":
+            lowered_names = {name.lower() for name in field_names}
+            name_matches = bool({"sex", "user_sex", "usersex"} & lowered_names) or java_field.endswith("Sex")
+        else:
+            name_matches = False
+
+        if not name_matches:
+            continue
+
+        label_overlap = len(field_labels & set(meta["labels"]))
+        value_overlap = len(field_values & set(meta["values"]))
+        if label_overlap or value_overlap == len(field_values):
+            return {
+                "dict_type": meta["dict_type"],
+                "dict_name": meta["dict_name"],
+                "constant_name": meta["constant_name"],
+                "score": 100,
+                "match_kind": "known_public_dict",
+                "label_overlap": 1.0 if field_labels else 0.0,
+                "value_overlap": 1.0,
+                "reason": meta["reason"],
+            }
+    return None
+
+
+def rank_reusable_dict_candidates(
+    field: dict[str, Any],
+    existing_types: dict[str, dict[str, Any]],
+    existing_data: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    field_values = {str(item.get("value") or "") for item in field.get("items") or []}
+    field_labels = {str(item.get("label") or "") for item in field.get("items") or []}
+    field_label = str(field.get("dict_name") or "")
+    short_label = normalize_dict_label(str(field.get("column_name") or ""))
+
+    for type_key, type_meta in existing_types.items():
+        items = existing_data.get(type_key, [])
+        if not items:
+            continue
+        existing_values = {str(item.get("value") or "") for item in items}
+        existing_labels = {str(item.get("label") or "") for item in items}
+        value_overlap = overlap_ratio(field_values, existing_values)
+        label_overlap = overlap_ratio(field_labels, existing_labels)
+        type_name = str(type_meta.get("name") or "")
+        name_score = compute_dict_name_score(field_label, short_label, type_key, type_name)
+
+        score = int(round(value_overlap * 50 + label_overlap * 35 + name_score * 15))
+        if score <= 0:
+            continue
+
+        reasons: list[str] = []
+        if value_overlap:
+            reasons.append(f"枚举值重合 {value_overlap:.0%}")
+        if label_overlap:
+            reasons.append(f"枚举标签重合 {label_overlap:.0%}")
+        if name_score:
+            reasons.append("字段/名称相似")
+
+        candidates.append({
+            "dict_type": type_key,
+            "dict_name": type_name,
+            "score": score,
+            "match_kind": "catalog_similarity",
+            "value_overlap": value_overlap,
+            "label_overlap": label_overlap,
+            "reason": "；".join(reasons) or "候选公共字典",
+        })
+
+    candidates.sort(key=lambda item: (-int(item["score"]), str(item["dict_type"])))
+    return candidates
+
+
+def overlap_ratio(left: set[str], right: set[str]) -> float:
+    if not left:
+        return 0.0
+    return len(left & right) / len(left)
+
+
+def compute_dict_name_score(
+    field_label: str,
+    short_label: str,
+    type_key: str,
+    type_name: str,
+) -> float:
+    normalized_field = normalize_dict_label(field_label)
+    normalized_type_name = normalize_dict_label(type_name)
+    normalized_type_key = normalize_dict_label(type_key)
+    if normalized_field and normalized_field == normalized_type_name:
+        return 1.0
+    if short_label and (short_label in normalized_type_key or short_label in normalized_type_name):
+        return 0.8
+    if normalized_field and normalized_type_name and (
+        normalized_field.endswith(normalized_type_name)
+        or normalized_type_name.endswith(normalized_field)
+    ):
+        return 0.6
+    return 0.0
+
+
+def normalize_dict_label(value: str) -> str:
+    return "".join(ch.lower() for ch in str(value) if ch.isalnum())
 
 
 def load_dict_types_from_sql(sql_dump_path: Path) -> dict[str, dict[str, Any]]:

@@ -23,13 +23,17 @@ from .config import (
     load_workspace_config,
     load_workspace_config_file,
 )
-from .database import resolve_database_config
-from .database import apply_menu_plan_to_database, apply_dict_plan_to_database
+from .database import (
+    resolve_database_config,
+    apply_menu_plan_to_database,
+    apply_dict_plan_to_database,
+    load_dict_catalog_from_database,
+)
 from .models import GeneratedFile, TableResolution
 from .inspector import discover_workspace_projects, inspect_project_path, scan_backend_table_entities, validate_workspace_projects
 from .schema import extract_dict_fields, inspect_table_schema
 from .scaffold import generate_scaffold_files
-from .sql_codegen import build_codegen_sql_bundle, write_codegen_sql_bundle
+from .sql_codegen import build_codegen_sql_bundle, build_dict_plan, write_codegen_sql_bundle
 from .writer import write_generated_files
 
 
@@ -172,14 +176,19 @@ def _prepare_codegen_sql_result(
     module_menu_icon: str | None = None,
 ) -> dict[str, Any]:
     sql_result: dict[str, Any] = {}
+    database_result, database_catalog = _load_database_dict_catalog_safely(root, config)
+    sql_result["database"] = database_result
+    sql_result["database_dict_catalog"] = database_catalog
     sql_bundle = build_codegen_sql_bundle(
         context,
         module_menu_name=module_menu_name,
         menu_name=menu_name,
         menu_icon=menu_icon,
         module_menu_icon=module_menu_icon,
+        database_dict_catalog=database_catalog if database_catalog and database_catalog.get("ok") else None,
     )
     sql_result["sql_bundle"] = sql_bundle
+    _attach_generated_dict_types(context, dict_plan=sql_bundle.get("dict_plan"))
     if not sql_bundle.get("ok"):
         sql_result["ok"] = False
         sql_result["error_code"] = "generate_codegen_sql_failed"
@@ -229,8 +238,6 @@ def _prepare_codegen_sql_result(
             "message": _describe_sql_apply_skip(menu_plan, dict_plan),
         }
     else:
-        database_result = resolve_database_config(root, config)
-        sql_result["database"] = database_result
         if not database_result.get("ok"):
             sql_result["ok"] = False
             sql_result["error_code"] = "database_config_unresolved"
@@ -289,6 +296,45 @@ def _prepare_codegen_sql_result(
     sql_result["error_code"] = None if apply_succeeded else "generate_codegen_sql_apply_failed"
     sql_result["message"] = "代码生成 SQL 已准备完成" if apply_succeeded else "SQL 已生成，但数据库写入存在失败项"
     return sql_result
+
+
+def _load_database_dict_catalog_safely(
+    root: Path,
+    config: WorkspaceConfig,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    database_result = resolve_database_config(root, config)
+    database_catalog: dict[str, Any] | None = None
+    if database_result.get("ok"):
+        try:
+            database_catalog = load_dict_catalog_from_database(database_result["database"])
+        except Exception as exc:
+            database_catalog = {
+                "ok": False,
+                "message": f"读取数据库字典目录失败：{exc}",
+            }
+    return database_result, database_catalog
+
+
+def _attach_smart_generated_dict_types(
+    root: Path,
+    config: WorkspaceConfig,
+    context: dict[str, Any],
+) -> None:
+    database_result, database_catalog = _load_database_dict_catalog_safely(root, config)
+    table_schema = context.get("table_schema") or {}
+    sql_dump_path_str = table_schema.get("sql_dump_path")
+    sql_dump_path = Path(sql_dump_path_str) if sql_dump_path_str else None
+    dict_plan = build_dict_plan(
+        context,
+        sql_dump_path=sql_dump_path,
+        database_dict_catalog=database_catalog if database_catalog and database_catalog.get("ok") else None,
+    )
+    context["dict_catalog_resolution"] = {
+        "database": database_result,
+        "database_dict_catalog": database_catalog,
+        "dict_plan": dict_plan,
+    }
+    _attach_generated_dict_types(context, dict_plan=dict_plan)
 
 
 def load_config_or_error(
@@ -604,7 +650,7 @@ def generate_codegen_scaffold_tool(
     )
     if field_overrides:
         _apply_field_overrides(context, field_overrides)
-    _attach_generated_dict_types(context)
+    _attach_smart_generated_dict_types(root, config, context)
     result: dict[str, Any] = {
         "workspace_root": str(root),
         "table_name": table_name,
@@ -1027,13 +1073,19 @@ def _enable_in_server_pom(pom_path: Path, artifact: str) -> None:
         pom_path.write_text(text, encoding="utf-8")
 
 
-def _attach_generated_dict_types(context: dict[str, Any]) -> None:
+def _attach_generated_dict_types(
+    context: dict[str, Any],
+    dict_plan: dict[str, Any] | None = None,
+) -> None:
     """Detect dict-like columns and attach generated_dict_type to each column."""
     table_schema = context.get("table_schema") or {}
     columns = table_schema.get("columns") or []
     table_name = context.get("table_name", "")
     table_comment = str(table_schema.get("table_comment") or table_name)
-    dict_fields = extract_dict_fields(columns, table_name, table_comment)
+    if dict_plan and dict_plan.get("dict_types"):
+        dict_fields = list(dict_plan.get("dict_types") or [])
+    else:
+        dict_fields = extract_dict_fields(columns, table_name, table_comment)
     if not dict_fields:
         return
     dict_map = {df["column_name"]: df for df in dict_fields}
@@ -1043,6 +1095,9 @@ def _attach_generated_dict_types(context: dict[str, Any]) -> None:
             col["generated_dict_type"] = df["dict_type"]
             col["generated_dict_name"] = df["dict_name"]
             col["generated_dict_items"] = df["items"]
+            if df.get("reuse_existing"):
+                col["generated_dict_reused"] = True
+                col["generated_dict_match"] = df.get("reuse_match")
 
 
 def _apply_field_overrides(context: dict[str, Any], overrides: dict[str, str]) -> None:

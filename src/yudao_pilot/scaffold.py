@@ -788,7 +788,7 @@ def render_vue3_index(relative_path: str, context: dict[str, Any]) -> str:
     query_lines = "\n".join(render_vue3_query_item(field) for field in query_fields)
     column_lines = "\n".join(render_vue3_table_column(field) for field in list_fields)
     query_state = render_vue3_query_state(context)
-    dict_import_line = build_vue3_dict_import_line(query_fields + list_fields)
+    dict_import_line = build_vue3_dict_import_line(query_fields, list_fields)
     formatter_import_line = (
         "import { dateFormatter } from '@/utils/formatTime'"
         if needs_vue3_date_formatter(list_fields)
@@ -2261,12 +2261,25 @@ def render_vue3_form_rules(fields: list[dict[str, Any]]) -> str:
     return "\n".join(rules)
 
 
-def build_vue3_dict_import_line(fields: list[dict[str, Any]]) -> str:
-    return (
-        "import { getIntDictOptions, getStrDictOptions, getBoolDictOptions, DICT_TYPE } from '@/utils/dict'"
-        if any(render_vue3_dict_options_expr(field) for field in fields)
-        else ""
-    )
+def build_vue3_dict_import_line(
+    option_fields: list[dict[str, Any]],
+    type_fields: list[dict[str, Any]] | None = None,
+) -> str:
+    imports: list[str] = []
+    for method in ("getIntDictOptions", "getStrDictOptions", "getBoolDictOptions"):
+        if any(
+            render_vue3_dict_options_expr(field)
+            and resolve_vue3_dict_method(field) == method
+            for field in option_fields
+        ):
+            imports.append(method)
+    if any(render_vue3_dict_options_expr(field) for field in option_fields) or any(
+        render_vue3_dict_type_expr(field) for field in (type_fields or option_fields)
+    ):
+        imports.append("DICT_TYPE")
+    if not imports:
+        return ""
+    return f"import {{ {', '.join(imports)} }} from '@/utils/dict'"
 
 
 def needs_vue3_date_formatter(fields: list[dict[str, Any]]) -> bool:
@@ -2363,6 +2376,8 @@ def render_vue3_select_control(
         )
     else:
         option_lines.extend(render_vue3_inline_option_lines(inline_options))
+    if not option_lines:
+        return f'<el-select v-model="{model}" placeholder="请选择{label}" clearable class="!w-240px" />'
     return (
         f'<el-select v-model="{model}" placeholder="请选择{label}" clearable class="!w-240px">\n'
         + "\n".join(option_lines)
@@ -2388,6 +2403,8 @@ def render_vue3_form_options_control(
         option_lines.append(f"          </{tag_name}>")
     else:
         option_lines.extend(render_vue3_inline_choice_lines(tag_name, inline_options))
+    if not option_lines:
+        return f'<{wrapper} v-model="{model}" />'
     return f'<{wrapper} v-model="{model}">\n' + "\n".join(option_lines) + f"\n        </{wrapper}>"
 
 
