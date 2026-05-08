@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from .config import WorkspaceConfig
@@ -143,6 +144,55 @@ def write_generated_files(
         "ok": all(result.written for result in results),
         "results": [result.model_dump() for result in results],
     }
+
+
+def write_preview_generated_files(
+    workspace_root: str | Path,
+    files: list[GeneratedFile],
+    *,
+    table_name: str,
+) -> dict[str, object]:
+    root = Path(workspace_root).expanduser().resolve()
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    preview_root = root / ".yudao-pilot" / "previews" / f"{normalize_preview_name(table_name)}-{timestamp}"
+    results: list[dict[str, object]] = []
+
+    for generated_file in files:
+        relative_path = Path(generated_file.target_kind) / generated_file.target_type / generated_file.relative_path
+        output_path = (preview_root / relative_path).resolve()
+        if not is_relative_to(output_path, preview_root.resolve()):
+            results.append(
+                {
+                    "target_kind": generated_file.target_kind,
+                    "target_type": generated_file.target_type,
+                    "path": str(output_path),
+                    "written": False,
+                    "reason": "预览路径越界，拒绝写入",
+                }
+            )
+            continue
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(generated_file.content, encoding="utf-8")
+        results.append(
+            {
+                "target_kind": generated_file.target_kind,
+                "target_type": generated_file.target_type,
+                "path": str(output_path),
+                "written": True,
+            }
+        )
+
+    return {
+        "ok": all(bool(result["written"]) for result in results),
+        "mode": "preview",
+        "preview_root": str(preview_root),
+        "results": results,
+    }
+
+
+def normalize_preview_name(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
+    return normalized.strip("-") or "codegen"
 
 
 def resolve_target_base_dir(

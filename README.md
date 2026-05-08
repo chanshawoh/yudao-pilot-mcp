@@ -45,9 +45,16 @@ uv tool install .
 load_workspace_config
 validate_workspace_projects
 inspect_codegen_context
-generate_codegen_scaffold
-generate_codegen_sql
+generate_codegen_scaffold(write_files=true)
 ```
+
+如果用户明确要求“先预览”，则调用：
+
+```text
+generate_codegen_scaffold(write_files=false)
+```
+
+此时预览产物会写入 `.yudao-pilot/previews/` 下的临时目录，不会影响项目现有代码。
 
 ### 文档
 
@@ -103,9 +110,16 @@ uv tool install .
 load_workspace_config
 validate_workspace_projects
 inspect_codegen_context
-generate_codegen_scaffold
-generate_codegen_sql
+generate_codegen_scaffold(write_files=true)
 ```
+
+If the user explicitly asks to preview first, call:
+
+```text
+generate_codegen_scaffold(write_files=false)
+```
+
+Preview artifacts are written under `.yudao-pilot/previews/` and do not touch the existing project code.
 
 ### Documentation
 

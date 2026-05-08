@@ -168,7 +168,8 @@ def test_inspect_codegen_context_tool_stops_when_database_connection_fails(
 
     assert result["ok"] is False
     assert result["error_code"] == "database_connection_required"
-    assert "请配置数据库连接" in result["message"]
+    assert "真实数据库" in result["message"]
+    assert "目标表结构" in result["message"]
 
 
 def test_generate_codegen_scaffold_tool_stops_when_table_and_migration_are_missing(
@@ -186,12 +187,12 @@ def test_generate_codegen_scaffold_tool_stops_when_table_and_migration_are_missi
     result = generate_codegen_scaffold_tool("missing_table", str(workspace_root))
 
     assert result["ok"] is False
-    assert result["error_code"] == "table_schema_missing"
-    assert "表不存在" in result["message"]
-    assert "迁移SQL" in result["message"]
+    assert result["error_code"] == "database_table_missing"
+    assert "真实数据库" in result["message"]
+    assert "目标表" in result["message"]
 
 
-def test_inspect_table_schema_tool_uses_migration_sql_without_database_execution(
+def test_inspect_table_schema_tool_requires_database_even_when_migration_sql_exists(
     workspace_builder,
     tmp_path: Path,
     monkeypatch,
@@ -235,13 +236,26 @@ def test_inspect_table_schema_tool_uses_migration_sql_without_database_execution
 
     result = inspect_table_schema_tool("missing_table", str(workspace_root))
 
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["error_code"] == "database_table_missing"
     assert parse_calls == ["missing_table"]
-    assert result["data"]["schema_source"] == "migration-sql"
-    assert result["data"]["database_table_missing"] is True
-    assert result["data"]["executed_migration_sqls"] == []
-    assert result["data"]["sql_dump_path"].endswith(migration_filename)
-    assert any(column["column_name"] == "id" for column in result["data"]["columns"])
+    assert "真实数据库" in result["message"]
+    assert "目标表" in result["message"]
+
+
+def test_codegen_stops_when_database_does_not_contain_table(
+    workspace_builder, monkeypatch
+) -> None:
+    workspace_root = workspace_builder()
+
+    monkeypatch.setattr(schema_module, "parse_table_schema_from_database", lambda *args, **kwargs: None)
+
+    result = generate_codegen_scaffold_tool("merchant", str(workspace_root))
+
+    assert result["ok"] is False
+    assert result["error_code"] == "database_table_missing"
+    assert "真实数据库" in result["message"]
+    assert "目标表" in result["message"]
 
 
 def test_infer_merchant_user_from_manual_rules(workspace_builder) -> None:
@@ -2043,6 +2057,38 @@ def test_generate_codegen_scaffold_write_files_outputs_frontend_artifacts(
     assert "import { ElLoading, ElMessage } from 'element-plus';" in web_ele_index
     assert "link: true" in web_ele_index
     assert "import { ElMessage } from 'element-plus';" in web_ele_form
+
+
+def test_generate_codegen_scaffold_preview_writes_to_temp_preview_dir(
+    workspace_builder,
+) -> None:
+    workspace_root = workspace_builder(
+        manual_rules_yaml="""
+- module: yudao
+  table_prefixes:
+    - yudao_demo01_contact
+    - yudao
+  table_rules:
+    - table: yudao_demo01_contact
+      business: demo01_contact
+      entity: Demo01Contact
+"""
+    )
+    result = generate_codegen_scaffold_tool("yudao_demo01_contact", str(workspace_root))
+
+    assert result["ok"] is True
+    preview_result = result["data"]["preview_result"]
+    assert preview_result["ok"] is True
+    assert preview_result["mode"] == "preview"
+    assert preview_result["workspace_root"] == str(workspace_root)
+    preview_root = Path(preview_result["preview_root"])
+    assert preview_root.is_dir()
+    assert workspace_root / ".yudao-pilot" / "previews" in preview_root.parents
+
+    first_written = Path(preview_result["results"][0]["path"])
+    assert first_written.exists()
+    assert str(first_written).startswith(str(preview_root))
+    assert not (workspace_root / "src/views/yudao/demo01-contact/index.vue").exists()
 
 
 def test_generate_codegen_scaffold_falls_back_to_database_schema(

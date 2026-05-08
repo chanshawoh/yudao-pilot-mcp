@@ -14,6 +14,8 @@ Yudao Pilot MCP 可以为代码生成流程补齐 SQL 产物：
 
 默认表生成路径中，`generate_codegen_scaffold(write_files=true)` 会一并处理这些 SQL 产物：写入 MySQL 菜单/字典迁移、合并 H2 `create_tables.sql` 和 `clean.sql`，并在配置允许时执行真实数据库写入。单独调用 `generate_codegen_sql` 适用于只补 SQL 或重跑 SQL 的场景。
 
+代码生成前必须能从真实数据库识别到目标表结构。本地 SQL 可用于辅助排查，但不再作为代码生成的放行来源；如果数据库里没有目标表，MCP 会以 `database_table_missing` 停止，要求先把业务表 DDL 落到真实数据库。
+
 当无法从已有 `system_menu` 判断父菜单时，MCP 不会要求 AI 停止等待用户；它会根据 `module_menu_name`、模块名、表注释、菜单名和业务名推断模块根菜单名称，生成幂等 SQL：已有则复用，不存在则自动创建。根菜单使用模块级业务名，例如 `travel` 为“旅游管理”；业务菜单优先翻译业务段，例如 `sim` 为“手机卡”，`travel_sim_sku` 生成“手机卡 SKU管理”。
 
 ### 配置开关
@@ -89,6 +91,8 @@ Yudao Pilot MCP can generate SQL artifacts for the code-generation flow:
 - Optional menu and dictionary writes to a real database
 
 In the default table-generation path, `generate_codegen_scaffold(write_files=true)` also handles these SQL artifacts: it writes the MySQL menu/dictionary migration, merges H2 `create_tables.sql` and `clean.sql`, and applies menu/dictionary data to the real database when the workspace config allows it. Use `generate_codegen_sql` directly when you only need to prepare or rerun SQL.
+
+Before code generation can continue, MCP must recognize the target table schema from the real database. Local SQL can help diagnostics, but no longer allows code generation by itself. If the real database does not contain the target table, MCP stops with `database_table_missing`.
 
 When an existing parent menu cannot be inferred from `system_menu`, the MCP should not stop and wait for the AI/user. It infers a root menu name from `module_menu_name`, module names, table comments, menu names, and business names, then emits idempotent SQL that reuses an existing menu or creates a new one. Root menus use module-level business names, for example `travel` becomes `旅游管理`; business menus translate business segments first, for example `sim` becomes `手机卡`, so `travel_sim_sku` becomes `手机卡 SKU管理`.
 

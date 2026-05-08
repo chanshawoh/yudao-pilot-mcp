@@ -35,18 +35,6 @@ def inspect_table_schema(
         try:
             runtime_schema = parse_table_schema_from_database(normalized_db_config, table_name)
         except Exception as exc:
-            sql_fallback = resolve_local_table_schema(repo_root, table_name, migration_sqls=migration_sqls)
-            if sql_fallback is not None:
-                sql_fallback["database_name"] = normalized_db_config.database
-                sql_fallback["database_lookup_failed"] = True
-                sql_fallback["database_lookup_error"] = (
-                    f"{exc.__class__.__name__}: {exc}"
-                )
-                sql_fallback["message"] = (
-                    f"真实数据库连接失败，已回退到本地 SQL 解析表字段："
-                    f"{exc.__class__.__name__}: {exc}"
-                )
-                return sql_fallback
             return build_unresolved_schema(
                 table_name=table_name,
                 sql_dump_path=None,
@@ -55,35 +43,23 @@ def inspect_table_schema(
                 message=(
                     f"无法连接数据库 {normalized_db_config.database}："
                     f"{exc.__class__.__name__}: {exc}。"
-                    f"{build_database_connection_hint(migration_sqls, include_migration_sqls=False)}"
+                    "必须先由真实数据库识别到目标表结构后，才能继续生成。"
                 ),
             )
         else:
             if runtime_schema is not None:
                 runtime_schema["executed_migration_sqls"] = []
                 return runtime_schema
-            sql_fallback = resolve_local_table_schema(repo_root, table_name, migration_sqls=migration_sqls)
-            if sql_fallback is not None:
-                sql_fallback["database_name"] = normalized_db_config.database
-                sql_fallback["database_table_missing"] = True
-                sql_fallback["message"] = (
-                    "真实数据库未找到目标表，已回退到本地 SQL 解析表字段"
-                )
-                return sql_fallback
             return build_unresolved_schema(
                 table_name=table_name,
                 sql_dump_path=None,
-                stop_reason="table_schema_missing",
+                stop_reason="database_table_missing",
                 executed_migration_sqls=[],
                 message=(
                     f"已尝试连接真实数据库 {normalized_db_config.database}，"
-                    "但表不存在，且本地也未找到目标表结构 SQL 或目标迁移SQL。"
+                    "但未识别到目标表。必须先将目标表落到真实数据库后，才能继续生成。"
                 ),
             )
-
-    sql_fallback = resolve_local_table_schema(repo_root, table_name, migration_sqls=migration_sqls)
-    if sql_fallback is not None:
-        return sql_fallback
 
     return build_unresolved_schema(
         table_name=table_name,
@@ -91,8 +67,7 @@ def inspect_table_schema(
         stop_reason="database_connection_required",
         executed_migration_sqls=[],
         message=(
-            "未提供可用数据库连接，且本地未找到目标表结构 SQL 或目标迁移SQL。"
-            f"{build_database_connection_hint(migration_sqls)}"
+            "未提供可用数据库连接。必须先让 MCP 能连接真实数据库并识别到目标表结构，才能继续生成。"
         ),
     )
 

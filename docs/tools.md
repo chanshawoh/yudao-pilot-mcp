@@ -13,23 +13,21 @@ load_workspace_config
 validate_workspace_projects
 ```
 
-生成代码前，安全模式建议先预览：
+默认直接写入项目：
 
 ```text
 inspect_codegen_context
 inspect_table_schema
-generate_codegen_scaffold(write_files=false)
-generate_codegen_sql(write_files=false)
+generate_codegen_scaffold(write_files=true)
 ```
 
-确认目标和内容后再写入；如果配置已经明确允许直接写入，也可以直接执行写入调用：
+只有用户明确要求“先预览”时，才调用：
 
 ```text
-generate_codegen_scaffold(write_files=true)
-generate_codegen_sql(write_files=true)
-write_generated_files
-write_mysql_migration
+generate_codegen_scaffold(write_files=false)
 ```
+
+此时 MCP 会把预览产物写入 `.yudao-pilot/previews/` 下的临时目录，保留 `generated_files` 内容，同时不修改真实项目代码。
 
 菜单/字典是否写入真实数据库只按配置决定，不按“是否先预览”强制绑定：
 
@@ -48,6 +46,7 @@ write_mysql_migration
 - `config_invalid`: 配置校验失败
 - `workspace_project_validation_failed`: 配置项目与实际项目不匹配
 - `table_schema_unresolved`: 表结构无法解析
+- `database_table_missing`: 已连接真实数据库，但未识别到目标表
 - `database_config_unresolved`: 数据库连接无法解析
 
 ### 工具清单
@@ -89,13 +88,15 @@ write_mysql_migration
 
 `inspect_table_schema`
 
-- 优先从后端仓库 SQL 文件解析表结构
-- 必要时回退到真实数据库配置
+- 优先从真实数据库解析字段
+- 必须从真实数据库识别到目标表后才能继续生成
+- 本地 SQL 不再作为代码生成的放行来源
 
 `generate_codegen_scaffold`
 
 - 生成后端和前端骨架代码
-- 可预览，也可写入工作区
+- 默认写入工作区
+- `write_files=false` 仅用于用户明确要求预览时；预览结果写入 `.yudao-pilot/previews/` 临时目录
 - `write_files=true` 时一并写入菜单/字典 MySQL 迁移和 H2 测试 SQL，并按配置决定是否落库
 
 `generate_codegen_sql`
@@ -126,23 +127,21 @@ load_workspace_config
 validate_workspace_projects
 ```
 
-Before generating code, safe mode recommends previewing first:
+By default, write directly to the project:
 
 ```text
 inspect_codegen_context
 inspect_table_schema
-generate_codegen_scaffold(write_files=false)
-generate_codegen_sql(write_files=false)
+generate_codegen_scaffold(write_files=true)
 ```
 
-After targets and content are confirmed, write files. If config explicitly allows direct writing, you can call the write path directly:
+Only call preview when the user explicitly asks to preview first:
 
 ```text
-generate_codegen_scaffold(write_files=true)
-generate_codegen_sql(write_files=true)
-write_generated_files
-write_mysql_migration
+generate_codegen_scaffold(write_files=false)
 ```
+
+In preview mode, MCP writes artifacts under `.yudao-pilot/previews/`, keeps `generated_files` in the response, and does not modify real project code.
 
 Writes to a real database for menu/dictionary data are config-driven rather than forced by a preview step:
 
@@ -161,6 +160,7 @@ Common stop codes:
 - `config_invalid`: Config validation failed
 - `workspace_project_validation_failed`: Configured projects do not match detected projects
 - `table_schema_unresolved`: Table schema cannot be resolved
+- `database_table_missing`: The real database was reached, but the target table was not found
 - `database_config_unresolved`: Database connection cannot be resolved
 
 ### Tool List
@@ -202,13 +202,15 @@ Common stop codes:
 
 `inspect_table_schema`
 
-- Resolves table schema from backend SQL files first
-- Falls back to real database config when needed
+- Prefers the real database for field metadata
+- Requires the target table to be recognized in the real database before generation can continue
+- Local SQL no longer acts as the gate for code generation
 
 `generate_codegen_scaffold`
 
 - Generates backend and frontend scaffold files
-- Supports preview and write modes
+- Writes to the project by default
+- `write_files=false` is only for explicit preview requests; preview files are written under `.yudao-pilot/previews/`
 
 `generate_codegen_sql`
 

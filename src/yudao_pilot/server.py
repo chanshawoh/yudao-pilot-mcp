@@ -34,7 +34,7 @@ from .inspector import discover_workspace_projects, inspect_project_path, scan_b
 from .schema import extract_dict_fields, inspect_table_schema
 from .scaffold import generate_scaffold_files
 from .sql_codegen import build_codegen_sql_bundle, build_dict_plan, write_codegen_sql_bundle
-from .writer import write_generated_files
+from .writer import write_generated_files, write_preview_generated_files
 
 
 mcp = FastMCP("Yudao Pilot")
@@ -695,6 +695,11 @@ def generate_codegen_scaffold_tool(
                 result,
             )
         return error_response("generate_codegen_scaffold_failed", "代码骨架生成成功，但写入存在失败项", result)
+    preview_result = write_preview_generated_files(root, generated_files, table_name=table_name)
+    preview_result["workspace_root"] = str(root)
+    result["preview_result"] = preview_result
+    if not preview_result["ok"]:
+        return error_response("generate_codegen_preview_failed", "代码骨架预览写入临时目录失败", result)
     return success_response("代码骨架生成成功", result)
 
 

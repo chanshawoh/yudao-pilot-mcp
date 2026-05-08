@@ -20,6 +20,8 @@ description: >
 - 先自己推断可推断的问题，例如目标模块、父菜单、后端 jar 子模块、前端类型。
 - 普通代码文件默认不能覆盖已有文件；合并型文件按合并逻辑修改已有文件。
 - 菜单/字典是否真实落库只看配置，不看 AI 的临时判断。
+- 代码生成必须先由真实数据库识别到目标表结构；本地 SQL 只能用于排查，不能单独放行生成。
+- 默认表生成直接写入项目；只有用户明确要求“先预览”时，才调用预览，预览会写入 `.yudao-pilot/previews/` 临时目录。
 
 ## 触发意图识别
 
@@ -89,7 +91,9 @@ inspect_table_schema(table_name)
 表结构解析规则：
 
 - 如果能从项目本地配置或工作区配置解析出数据库连接，优先以真实数据库为准。
-- 真实数据库里目标表不存在时，可以回退到“目标表自己的迁移 SQL”解析字段，但不要因为这个自动执行迁移 SQL、不要自动改库。
+- 继续生成前，必须由真实数据库识别到目标表结构。
+- 本地 SQL 只用于排查和辅助理解，不再作为代码生成的放行来源。
+- 如果真实数据库里目标表不存在，必须停止；不要生成代码。
 - 不要把项目基准 `ruoyi-vue-pro.sql` 当作“新表必须存在”的依据；新表 DDL 本来就可能不在里面。
 - 如果没有可用数据库连接，也没有目标表自己的 SQL，再停止并提示用户补充信息。
 
@@ -105,7 +109,7 @@ inspect_table_schema(table_name)
 | `infer_codegen_plan` | 根据表名推导模块、业务名、实体名和目标项目 |
 | `inspect_codegen_context` | 构建完整代码生成上下文 |
 | `inspect_table_schema` | 解析目标表字段 |
-| `generate_codegen_scaffold` | 生成后端和前端代码骨架，可预览或写入 |
+| `generate_codegen_scaffold` | 生成后端和前端代码骨架；默认写入，明确预览时写入临时目录 |
 | `write_generated_files` | 写入外部生成的文件，走 MCP 路由和安全规则 |
 | `write_mysql_migration` | 写入 MySQL 迁移文件 |
 | `generate_codegen_sql` | 生成菜单 SQL、字典 SQL、H2 SQL，并按配置决定是否落库 |
@@ -129,7 +133,6 @@ load_workspace_config
 validate_workspace_projects
 resolve_database_config
 inspect_codegen_context(table_name)
-generate_codegen_scaffold(table_name, write_files=false)
 generate_codegen_scaffold(table_name, write_files=true)
 ```
 
@@ -138,6 +141,16 @@ generate_codegen_scaffold(table_name, write_files=true)
 如果 SQL 生成链路依配置允许落库，就接受这就是配置要求，不要擅自跳过。
 
 同一张表的菜单/字典迁移如果逻辑文件已存在（例如 `*_add_xxx_menus.sql`），不要重复生成第二份；应复用已有逻辑迁移文件，必要时仅在用户允许覆盖时更新它。
+
+### 预览模式
+
+只有用户明确说“先预览”“只看一下”“不要先写入项目代码”时，才调用：
+
+```text
+generate_codegen_scaffold(table_name, write_files=false)
+```
+
+预览不是纯内存返回。MCP 会把文件镜像写入 `.yudao-pilot/previews/<table>-<timestamp>/`，路径按 `backend|frontend/<target_type>/...` 保留真实相对结构，便于检查 diff，但不会影响后端或前端项目现有代码。
 
 ### 仅代码生成
 
@@ -155,7 +168,6 @@ load_workspace_config
 validate_workspace_projects
 resolve_database_config
 inspect_codegen_context(table_name)
-generate_codegen_scaffold(table_name, write_files=false)
 generate_codegen_scaffold(table_name, write_files=true)
 ```
 
