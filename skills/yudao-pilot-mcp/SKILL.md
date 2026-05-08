@@ -1,7 +1,7 @@
 ---
 name: yudao-pilot-mcp
 description: >
-  当用户在芋道、yudao、ruoyi-vue-pro 或若依生态项目中表达“根据数据库表生成代码”“按表生成代码”
+  当用户在芋道、yudao、ruoyi-vue-pro、ruoyi-vue-pro-jdk17 或 yudao-cloud 项目中表达“根据数据库表生成代码”“按表生成代码”
   “根据表结构生成前后端”“为某张表生成 CRUD / 管理后台 / 接口 / 页面 / 菜单 / 字典 / SQL”等意图时使用，
   并通过当前 Yudao Pilot MCP 完成表结构检查、代码生成上下文推导、后端与前端代码生成、菜单 SQL、字典 SQL、
   H2 测试 SQL 生成和按配置安全写入。也用于项目识别、.yudao-pilot 配置初始化与校验、数据库配置解析。
@@ -10,6 +10,10 @@ description: >
 # Yudao Pilot MCP
 
 这是 Yudao Pilot MCP 的操作型 Skill，用于指导 AI 在芋道 / ruoyi-vue-pro 项目中稳定完成项目识别、配置读取、表结构解析、代码生成、SQL 生成和安全写入。
+
+## 严肃声明
+
+`yudao`、`ruoyi-vue-pro` 生态与 `ruoyi` / `RuoYi` / 若依原生生态不是同一个项目。当前 MCP 只支持 `yudao`、`ruoyi-vue-pro`、`ruoyi-vue-pro-jdk17`、`yudao-cloud` 相关项目，不支持若依原生生态项目。
 
 核心原则：
 
@@ -27,8 +31,10 @@ description: >
 
 用户没有显式说“Yudao Pilot MCP”也应触发本 skill，只要同时满足：
 
-- 当前任务位于或指向芋道、yudao、ruoyi-vue-pro、若依生态项目。
+- 当前任务位于或指向芋道、yudao、ruoyi-vue-pro、ruoyi-vue-pro-jdk17、yudao-cloud 项目。
 - 用户想从数据库表、表名、表结构、DDL、MySQL 表、已有业务表生成代码或 SQL。
+
+如果用户指向的是 `ruoyi` / `RuoYi` / 若依原生生态项目，不要调用本 MCP 执行代码生成；应明确说明当前 Yudao Pilot MCP 不支持若依原生生态项目。
 
 这些表达都按“根据表生成代码”处理：
 

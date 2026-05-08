@@ -6,6 +6,10 @@
 
 Yudao Pilot MCP 是一个专门服务 yudao / ruoyi-vue-pro 项目的 MCP 领域适配层。它不替代 AI 编码工具，而是为 AI 工具补上确定性的项目理解能力。
 
+### 严肃声明
+
+`yudao`、`ruoyi-vue-pro` 生态与 `ruoyi` / `RuoYi` / 若依原生生态不是同一个项目。当前 MCP 只支持 `yudao`、`ruoyi-vue-pro`、`ruoyi-vue-pro-jdk17`、`yudao-cloud` 相关项目，不支持若依原生生态项目。
+
 ### 为什么需要它
 
 通用 AI 编码工具在 yudao 项目里通常会遇到这些问题：
@@ -58,6 +62,10 @@ AI 应用负责：
 ## English
 
 Yudao Pilot MCP is a domain-specific MCP adapter for yudao / ruoyi-vue-pro projects. It does not replace AI coding tools. It gives them deterministic workspace awareness before they generate or write code.
+
+### Important Notice
+
+The `yudao` / `ruoyi-vue-pro` ecosystem is not the same project as the original `ruoyi` / `RuoYi` ecosystem. This MCP currently supports `yudao`, `ruoyi-vue-pro`, `ruoyi-vue-pro-jdk17`, and `yudao-cloud` projects only. It does not support original RuoYi projects.
 
 ### Why It Exists
 

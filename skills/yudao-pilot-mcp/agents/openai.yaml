@@ -7,7 +7,7 @@ dependencies:
   tools:
     - type: "mcp"
       value: "yudao-pilot"
-      description: "Yudao Pilot MCP server，用于芋道 / ruoyi-vue-pro 项目识别与代码生成"
+      description: "Yudao Pilot MCP server，用于芋道 / ruoyi-vue-pro 项目识别与代码生成；不支持 ruoyi / RuoYi / 若依原生项目"
 
 policy:
   allow_implicit_invocation: true

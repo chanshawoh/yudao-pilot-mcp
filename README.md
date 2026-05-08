@@ -6,6 +6,10 @@
 
 Yudao Pilot MCP 是面向 yudao / ruoyi-vue-pro 生态的工作区感知型 MCP 服务。它帮助 AI 编码工具识别本地后端、前端、数据库和代码生成目标，让 AI 生成的代码准确落到正确项目结构里。
 
+### 严肃声明
+
+`yudao`、`ruoyi-vue-pro` 生态与 `ruoyi` / `RuoYi` / 若依原生生态不是同一个项目。当前 MCP 只支持 `yudao`、`ruoyi-vue-pro`、`ruoyi-vue-pro-jdk17`、`yudao-cloud` 相关项目，不支持若依原生生态项目。
+
 ### 核心价值
 
 - 让 AI 不再猜 yudao 项目目录和生成位置
@@ -70,6 +74,10 @@ generate_codegen_scaffold(write_files=false)
 ## English
 
 Yudao Pilot MCP is a workspace-aware MCP server for the yudao / ruoyi-vue-pro ecosystem. It helps AI coding tools understand local backend projects, frontend targets, database configuration, and code-generation routes so generated code lands in the right place.
+
+### Important Notice
+
+The `yudao` / `ruoyi-vue-pro` ecosystem is not the same project as the original `ruoyi` / `RuoYi` ecosystem. This MCP currently supports `yudao`, `ruoyi-vue-pro`, `ruoyi-vue-pro-jdk17`, and `yudao-cloud` projects only. It does not support original RuoYi projects.
 
 ### Core Value
 
