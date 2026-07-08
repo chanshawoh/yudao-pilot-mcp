@@ -103,6 +103,155 @@ def test_inspect_backend_project_by_fingerprint(tmp_path: Path) -> None:
     assert result["backend"]["supported"] is True
 
 
+def test_single_app_backend_with_cloud_dependencies_is_not_yudao_cloud(tmp_path: Path) -> None:
+    project = tmp_path / "aifu-wellness-system"
+    server = project / "yudao-server"
+    server.mkdir(parents=True)
+    (project / "pom.xml").write_text(
+        """<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>cn.iocoder.boot</groupId>
+  <artifactId>yudao</artifactId>
+  <packaging>pom</packaging>
+  <properties>
+    <java.version>21</java.version>
+    <spring.boot.version>3.5.15</spring.boot.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>cn.iocoder.boot</groupId>
+        <artifactId>yudao-dependencies</artifactId>
+        <version>${revision}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.alibaba.cloud</groupId>
+        <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+        <version>${spring-cloud-alibaba.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <modules>
+    <module>yudao-dependencies</module>
+    <module>yudao-framework</module>
+    <module>yudao-server</module>
+    <module>yudao-module-system</module>
+    <module>yudao-module-infra</module>
+    <module>yudao-module-health</module>
+  </modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (server / "pom.xml").write_text(
+        """<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>cn.iocoder.boot</groupId>
+    <artifactId>yudao</artifactId>
+  </parent>
+  <artifactId>yudao-server</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>cn.iocoder.boot</groupId>
+      <artifactId>yudao-module-system</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>cn.iocoder.boot</groupId>
+      <artifactId>yudao-module-infra</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.cloud</groupId>
+      <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-openfeign</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.baomidou</groupId>
+      <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+
+    result = inspect_project_path(project)
+
+    assert result["backend"]["supported"] is True
+    assert result["backend"]["detected_type"] == "ruoyi-vue-pro-jdk17"
+    assert result["best_match"]["detected_type"] == "ruoyi-vue-pro-jdk17"
+
+
+def test_yudao_cloud_backend_requires_gateway_service(tmp_path: Path) -> None:
+    project = tmp_path / "kemai-system"
+    gateway = project / "yudao-gateway"
+    gateway.mkdir(parents=True)
+    (project / "pom.xml").write_text(
+        """<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>cn.iocoder.cloud</groupId>
+  <artifactId>yudao</artifactId>
+  <packaging>pom</packaging>
+  <properties>
+    <java.version>21</java.version>
+    <spring.boot.version>3.5.9</spring.boot.version>
+  </properties>
+  <modules>
+    <module>yudao-dependencies</module>
+    <module>yudao-gateway</module>
+    <module>yudao-framework</module>
+    <module>yudao-server</module>
+    <module>yudao-module-system</module>
+    <module>yudao-module-infra</module>
+  </modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (gateway / "pom.xml").write_text(
+        """<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>cn.iocoder.cloud</groupId>
+    <artifactId>yudao</artifactId>
+  </parent>
+  <artifactId>yudao-gateway</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.cloud</groupId>
+      <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+
+    result = inspect_project_path(project)
+
+    assert result["backend"]["supported"] is True
+    assert result["backend"]["detected_type"] == "yudao-cloud"
+    assert result["best_match"]["detected_type"] == "yudao-cloud"
+
+
 def test_inspect_frontend_vben_by_fingerprint(tmp_path: Path) -> None:
     result = inspect_project_path(_write_vben_project(tmp_path / "yudao-ui-admin-vben"))
     assert result["exists"] is True

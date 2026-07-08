@@ -103,6 +103,15 @@ codegen:
 - `mode=manual`: 直接使用配置文件里的数据库连接
 - `mode=auto`: 优先使用配置文件字段；空字段再从后端本地配置解析
 
+`codegen`
+
+- `apply_to_database`: 是否允许菜单/字典 SQL 写入真实数据库；默认 `false`，只生成 SQL 产物不落库
+- `menu_sql_mode`: 菜单 SQL 模式，支持 `auto`、`migration_only`、`disabled`
+- `dict_sql_mode`: 字典 SQL 模式，支持 `auto`、`migration_only`、`disabled`
+- `auto`: 生成对应 SQL；当 `apply_to_database=true` 时允许写入数据库
+- `migration_only`: 只生成迁移 SQL，不写数据库，即使 `apply_to_database=true`
+- `disabled`: 不生成对应 SQL，也不会写数据库
+
 `codegen.routing.mode`
 
 - `manual`: 按 `manual_rules` 解析，适合稳定团队项目
@@ -223,6 +232,15 @@ Supported frontend types:
 
 - `mode=manual`: Use the connection fields from this config file
 - `mode=auto`: Use config fields first, then resolve missing fields from backend local config
+
+`codegen`
+
+- `apply_to_database`: Whether menu/dictionary SQL may be written to the real database; defaults to `false`, which only generates SQL artifacts
+- `menu_sql_mode`: Menu SQL mode; supports `auto`, `migration_only`, and `disabled`
+- `dict_sql_mode`: Dictionary SQL mode; supports `auto`, `migration_only`, and `disabled`
+- `auto`: Generates the matching SQL; allows DB writes when `apply_to_database=true`
+- `migration_only`: Generates migration SQL only and never writes to the DB, even when `apply_to_database=true`
+- `disabled`: Omits the matching SQL and never writes to the DB
 
 `codegen.routing.mode`
 

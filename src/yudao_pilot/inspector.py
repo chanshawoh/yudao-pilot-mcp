@@ -466,8 +466,10 @@ def inspect_backend_project(project_path: Path) -> ProjectDetection:
     evidence.extend(boot2_markers["evidence"])
 
     detected_type: str | None = None
-    if cloud_markers["score"] >= 2:
+    has_gateway_service = any(is_gateway_service_artifact(module) for module in effective_root_facts.modules)
+    if cloud_markers["score"] >= 2 and has_gateway_service:
         detected_type = "yudao-cloud"
+        evidence.append("modules 中包含 gateway 服务，按 yudao-cloud 识别")
     elif boot3_markers["score"] > boot2_markers["score"] and boot3_markers["score"] >= 3:
         detected_type = "ruoyi-vue-pro-jdk17"
     elif boot2_markers["score"] >= 3:
@@ -491,6 +493,13 @@ def is_yudao_server_artifact(artifact_id: str | None) -> bool:
         return False
     normalized = artifact_id.lower()
     return normalized == "yudao-server" or normalized.endswith("-server")
+
+
+def is_gateway_service_artifact(artifact_id: str | None) -> bool:
+    if not artifact_id:
+        return False
+    normalized = artifact_id.lower()
+    return normalized == "yudao-gateway" or normalized.endswith("-gateway")
 
 
 def score_yudao_module_layout(modules: list[str]) -> tuple[int, list[str]]:
@@ -679,6 +688,7 @@ def collect_cloud_markers(
 
     cloud_artifacts = {
         "spring-cloud-starter-gateway",
+        "spring-cloud-starter-gateway-server-webflux",
         "spring-cloud-starter-bootstrap",
         "spring-cloud-starter-openfeign",
         "spring-cloud-starter-loadbalancer",
