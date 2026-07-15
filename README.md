@@ -127,15 +127,19 @@ generate_codegen_scaffold(write_files=false)
 将下面的要求交给使用该 MCP 的 AI Agent：
 
 ```text
-这是 yudao / ruoyi-vue-pro 项目，不是原生 RuoYi 项目。涉及根据数据库表生成代码时，必须使用 yudao-pilot MCP。
+请安装并配置 yudao-pilot-mcp。不要克隆源码仓库，除非用户明确要参与开发。
 
-1. 先调用 load_workspace_config，再调用 validate_workspace_projects。
-2. 如果返回 config_initialized，暂停生成，让用户确认 .yudao-pilot/config.yaml 中识别到的项目路径。
-3. 生成前调用 resolve_database_config 和 inspect_codegen_context(table_name)，并确认真实数据库中存在目标表。
-4. 用户未明确要求预览时，调用 generate_codegen_scaffold(table_name, write_files=true)；只有用户明确说“先预览”时才使用 write_files=false。
-5. 不要擅自修改 apply_to_database、SQL mode、routing 或 manual_rules。
-6. 普通目标文件已存在时不要覆盖；把 MCP 返回的 next_action_prompt 交给用户确认。
-7. 后端和前端写入路径只使用 MCP 返回的 codegen_target、frontend_targets 和 generated_file_plan，不根据目录名猜测。
+1. 确认 Python 版本不低于 3.11。
+2. 优先执行 pipx install yudao-pilot-mcp，将 MCP Server 安装为隔离的命令行工具。
+3. 如果没有 pipx 但有 uv，执行 uv tool install yudao-pilot-mcp。
+4. 如果两者都没有，创建 Python 虚拟环境并执行 python -m pip install yudao-pilot-mcp。
+5. 如果当前包镜像找不到该包，使用 --index-url https://pypi.org/simple/ 从官方 PyPI 安装。
+6. 验证 yudao-pilot 命令存在。不要把 stdio MCP Server 持续运行在测试终端中。
+7. 在用户的 MCP 客户端配置中注册 command=yudao-pilot、args=[]。
+8. 如果 MCP 客户端读取不到 PATH，使用虚拟环境 Python 的绝对路径，并配置 args=["-m", "yudao_pilot.server"]。
+9. 配置完成后提醒用户重启或重新加载 MCP 客户端。
+
+安装后的业务操作方式以 yudao-pilot-mcp Skill 为准，不要在安装阶段自行执行代码生成或数据库写入。
 ```
 
 ### 开源协议
@@ -278,15 +282,19 @@ Preview artifacts are written under `.yudao-pilot/previews/` and do not touch th
 Give the following requirements to the AI Agent using this MCP server:
 
 ```text
-This is a yudao / ruoyi-vue-pro project, not an original RuoYi project. For database-table-based code generation, use the yudao-pilot MCP server.
+Install and configure yudao-pilot-mcp. Do not clone the source repository unless the user explicitly wants a development checkout.
 
-1. Call load_workspace_config first, then validate_workspace_projects.
-2. If config_initialized is returned, stop generation and ask the user to confirm the detected paths in .yudao-pilot/config.yaml.
-3. Before generation, call resolve_database_config and inspect_codegen_context(table_name), and require the target table to exist in the real database.
-4. Unless the user explicitly asks for a preview, call generate_codegen_scaffold(table_name, write_files=true). Use write_files=false only for an explicit preview request.
-5. Do not silently change apply_to_database, SQL modes, routing, or manual_rules.
-6. Do not overwrite normal generated files when they already exist. Present the MCP next_action_prompt to the user.
-7. Use only the codegen_target, frontend_targets, and generated_file_plan returned by the MCP server; do not guess output paths from directory names.
+1. Confirm that Python 3.11 or newer is available.
+2. Prefer pipx install yudao-pilot-mcp to install the MCP server as an isolated CLI application.
+3. If pipx is unavailable but uv is installed, run uv tool install yudao-pilot-mcp.
+4. If neither tool is available, create a Python virtual environment and run python -m pip install yudao-pilot-mcp.
+5. If the configured package mirror cannot find the package, install from the official index with --index-url https://pypi.org/simple/.
+6. Verify that the yudao-pilot command exists. Do not leave the stdio MCP server running in the verification terminal.
+7. Register the server in the user's MCP client with command=yudao-pilot and args=[].
+8. If the MCP client cannot see the command on PATH, use the absolute path to the virtual-environment Python and set args=["-m", "yudao_pilot.server"].
+9. Ask the user to restart or reload the MCP client after saving the configuration.
+
+After installation, follow the yudao-pilot-mcp Skill for business operations. Do not start code generation or database writes during installation.
 ```
 
 ### License
