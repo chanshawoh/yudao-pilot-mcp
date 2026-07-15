@@ -367,6 +367,16 @@ def resolve_backend_codegen_defaults(
     if application_config is None:
         return {
             "resolved": False,
+            "config_source": None,
+            "base_package": "cn.iocoder.yudao",
+            "db_schemas": [],
+            "db_schemas_source": "default",
+            "front_type": None,
+            "front_type_label": None,
+            "vo_type": None,
+            "vo_type_label": None,
+            "delete_batch_enable": False,
+            "unit_test_enable": False,
             "message": "未能从后端配置读取 yudao.codegen 默认配置",
         }
 

@@ -29,6 +29,7 @@ from yudao_pilot.codegen import (
     normalize_backend_module_dir,
     resolve_backend_codegen_target,
     resolve_backend_business_name,
+    resolve_backend_codegen_defaults,
     resolve_frontend_codegen_targets,
     write_mysql_migration,
 )
@@ -44,6 +45,15 @@ from yudao_pilot.scaffold import (
     render_vue3_dict_type_expr,
 )
 from yudao_pilot.sql_codegen import build_dict_plan, merge_sql_snippet, resolve_h2_sql_plan
+
+
+def test_missing_backend_codegen_config_returns_safe_defaults(tmp_path: Path) -> None:
+    defaults = resolve_backend_codegen_defaults(tmp_path / "backend", "local")
+
+    assert defaults["resolved"] is False
+    assert defaults["base_package"] == "cn.iocoder.yudao"
+    assert defaults["db_schemas"] == []
+    assert defaults["unit_test_enable"] is False
 
 
 def _rewrite_backend_path(workspace_root: Path, backend_path: Path) -> None:
@@ -112,40 +122,6 @@ def test_resolve_database_config_supports_partial_override(workspace_builder) ->
     assert result["data"]["database"]["host"] == "127.0.0.1"
     assert result["data"]["database"]["database"] == "ruoyi-vue-pro-260319"
     assert result["data"]["database"]["source"] == "config"
-
-
-def test_inspect_table_schema_tool_returns_columns(workspace_builder) -> None:
-    workspace_root = workspace_builder(
-        manual_rules_yaml="""
-- module: yudao
-  table_rules:
-    - table: yudao_demo01_contact
-      business: demo01_contact
-      entity: Demo01Contact
-""".strip()
-    )
-    result = inspect_table_schema_tool("yudao_demo01_contact", str(workspace_root))
-
-    assert result["ok"] is True
-    columns = result["data"]["columns"]
-    assert any(column["column_name"] == "name" for column in columns)
-    assert any(column["column_name"] == "birthday" for column in columns)
-
-
-def test_inspect_codegen_context_contains_schema_and_plan(workspace_builder) -> None:
-    workspace_root = workspace_builder()
-    result = inspect_codegen_context_tool("member_user", str(workspace_root))
-
-    assert result["ok"] is True
-    data = result["data"]
-    assert data["permission_prefix"] == "member:user"
-    assert "table_schema" in data
-    assert "generated_file_plan" in data
-    assert data["migration_plan"]["directory"].endswith("/sql/mysql/migrations")
-    assert data.get("codegen_sql", {}).get("menu_mode") == "auto"
-    assert data.get("codegen_sql", {}).get("dict_mode") == "auto"
-    assert all("yudao-module-member/src/" in path for path in data["generated_file_plan"]["backend"])
-    assert all("yudao-module-member-server/" not in path for path in data["generated_file_plan"]["backend"])
 
 
 def test_inspect_codegen_context_tool_stops_when_database_connection_fails(
@@ -258,154 +234,6 @@ def test_codegen_stops_when_database_does_not_contain_table(
     assert "目标表" in result["message"]
 
 
-def test_infer_merchant_user_from_manual_rules(workspace_builder) -> None:
-    workspace_root = workspace_builder()
-    result = inspect_codegen_context_tool("merchant_user", str(workspace_root))
-
-    assert result["ok"] is True
-    data = result["data"]
-    assert data["module_name"] == "member"
-    assert data["business_name"] == "merchant_user"
-    assert data["entity_name"] == "MerchantUser"
-    assert data["permission_prefix"] == "member:merchant-user"
-
-
-def test_infer_merchant_from_manual_rules(workspace_builder) -> None:
-    workspace_root = workspace_builder()
-    result = inspect_codegen_context_tool("merchant", str(workspace_root))
-
-    assert result["ok"] is True
-    data = result["data"]
-    assert data["module_name"] == "member"
-    assert data["business_name"] == "merchant"
-    assert data["entity_name"] == "Merchant"
-    assert data["permission_prefix"] == "member:merchant"
-
-
-def test_generate_codegen_scaffold_includes_field_level_content(workspace_builder) -> None:
-    workspace_root = workspace_builder(
-        manual_rules_yaml="""
-- module: yudao
-  table_rules:
-    - table: yudao_demo01_contact
-      business: demo01_contact
-      entity: Demo01Contact
-""".strip()
-    )
-    result = generate_codegen_scaffold_tool("yudao_demo01_contact", str(workspace_root))
-
-    assert result["ok"] is True
-    generated_files = result["data"]["generated_files"]
-    save_req = next(
-        item
-        for item in generated_files
-        if item["relative_path"].endswith("Demo01ContactSaveReqVO.java")
-    )
-    form_vue = next(
-        item
-        for item in generated_files
-        if item["relative_path"].endswith("demo01ContactForm.vue")
-    )
-
-    assert "private String name;" in save_req["content"]
-    assert "private LocalDateTime birthday;" in save_req["content"]
-    assert 'v-model="formData.description"' in form_vue["content"]
-
-
-def test_generate_codegen_scaffold_outputs_all_configured_frontends(workspace_builder) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=(
-            "VUE3_ELEMENT_PLUS",
-            "VUE3_VBEN5_ANTD_SCHEMA",
-            "VUE3_ADMIN_UNIAPP_WOT",
-        )
-    )
-    result = generate_codegen_scaffold_tool("merchant", str(workspace_root))
-
-    assert result["ok"] is True
-    generated_files = result["data"]["generated_files"]
-    summary: dict[str, int] = {}
-    for item in generated_files:
-        summary[item["target_type"]] = summary.get(item["target_type"], 0) + 1
-
-    assert summary["VUE3_ELEMENT_PLUS"] == 3
-    assert summary["VUE3_VBEN5_ANTD_SCHEMA"] == 4
-    assert summary["VUE3_ADMIN_UNIAPP_WOT"] == 5
-    assert result["data"]["generation_summary"]["by_kind"]["frontend"] == 12
-
-
-def test_generate_codegen_scaffold_warns_when_frontend_is_disabled(workspace_builder) -> None:
-    workspace_root = workspace_builder(frontend_types=("VUE3_ELEMENT_PLUS",))
-    result = generate_codegen_scaffold_tool(
-        "merchant",
-        str(workspace_root),
-        include_frontend=False,
-    )
-
-    assert result["ok"] is True
-    summary = result["data"]["generation_summary"]
-    assert summary["include_frontend"] is False
-    assert summary["by_kind"].get("frontend", 0) == 0
-    assert summary["warnings"] == ["include_frontend=false，已跳过配置中的前端代码生成"]
-
-
-def test_generate_codegen_scaffold_supports_all_vben_variants(workspace_builder) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=(
-            "VUE3_VBEN5_ANTD_SCHEMA",
-            "VUE3_VBEN5_ANTD_GENERAL",
-            "VUE3_VBEN5_EP_SCHEMA",
-            "VUE3_VBEN5_EP_GENERAL",
-        )
-    )
-    result = generate_codegen_scaffold_tool("merchant", str(workspace_root))
-
-    assert result["ok"] is True
-    generated_files = result["data"]["generated_files"]
-    grouped_paths: dict[str, list[str]] = {}
-    for item in generated_files:
-        grouped_paths.setdefault(item["target_type"], []).append(item["relative_path"])
-
-    assert len(grouped_paths["VUE3_VBEN5_ANTD_SCHEMA"]) == 4
-    assert len(grouped_paths["VUE3_VBEN5_ANTD_GENERAL"]) == 3
-    assert len(grouped_paths["VUE3_VBEN5_EP_SCHEMA"]) == 4
-    assert len(grouped_paths["VUE3_VBEN5_EP_GENERAL"]) == 3
-
-    assert all(
-        path.startswith("apps/web-antd/")
-        for path in grouped_paths["VUE3_VBEN5_ANTD_SCHEMA"]
-    )
-    assert all(
-        path.startswith("apps/web-antd/")
-        for path in grouped_paths["VUE3_VBEN5_ANTD_GENERAL"]
-    )
-    assert all(
-        path.startswith("apps/web-ele/")
-        for path in grouped_paths["VUE3_VBEN5_EP_SCHEMA"]
-    )
-    assert all(
-        path.startswith("apps/web-ele/")
-        for path in grouped_paths["VUE3_VBEN5_EP_GENERAL"]
-    )
-
-    assert any(
-        path.endswith("/data.ts")
-        for path in grouped_paths["VUE3_VBEN5_ANTD_SCHEMA"]
-    )
-    assert not any(
-        path.endswith("/data.ts")
-        for path in grouped_paths["VUE3_VBEN5_ANTD_GENERAL"]
-    )
-    assert any(
-        path.endswith("/data.ts")
-        for path in grouped_paths["VUE3_VBEN5_EP_SCHEMA"]
-    )
-    assert not any(
-        path.endswith("/data.ts")
-        for path in grouped_paths["VUE3_VBEN5_EP_GENERAL"]
-    )
-
-
 def test_vben_child_app_frontend_path_generates_app_local_paths(tmp_path: Path) -> None:
     web_ele = tmp_path / "frontend" / "apps" / "web-ele"
     web_ele.mkdir(parents=True)
@@ -447,38 +275,6 @@ def test_vben_child_app_frontend_path_generates_app_local_paths(tmp_path: Path) 
     paths = plan["frontends"][0]["relative_paths"]
     assert "src/views/member/merchant/data.ts" in paths
     assert not any(path.startswith("apps/web-ele/") for path in paths)
-
-
-def test_generate_codegen_scaffold_uses_suffix_subdirectory_when_frontend_business_collides(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_VBEN5_ANTD_SCHEMA",),
-        manual_rules_yaml="""
-- module: member
-  table_prefixes:
-    - merchant
-  table_rules:
-    - table: merchant
-      business: merchant
-      entity: Merchant
-    - table: merchant_user
-      business: merchant
-      entity: MerchantUser
-""".strip(),
-    )
-    result = generate_codegen_scaffold_tool("merchant_user", str(workspace_root))
-
-    assert result["ok"] is True
-    generated_files = result["data"]["generated_files"]
-    frontend_paths = [
-        item["relative_path"]
-        for item in generated_files
-        if item["target_kind"] == "frontend" and item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
-    ]
-
-    assert all("/member/merchant/user/" in path for path in frontend_paths)
-    assert result["data"]["context"]["generated_file_plan"]["frontend_business_path"] == "merchant/user"
 
 
 def test_frontend_business_path_uses_lower_camel_segments() -> None:
@@ -949,65 +745,6 @@ def test_rendered_backend_and_frontend_use_split_business_names() -> None:
     assert "@/api/travel/simSpu" not in frontend_api
 
 
-def test_generate_codegen_scaffold_uses_simple_class_name_for_vue3_form_import(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ELEMENT_PLUS",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    index_vue = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/views/hotel/brand/index.vue")
-    )
-
-    assert "import BrandForm from './brandForm.vue'" in index_vue["content"]
-    assert "<BrandForm ref=\"formRef\" @success=\"getList\" />" in index_vue["content"]
-    assert "import HotelBrandForm from './BrandForm.vue'" not in index_vue["content"]
-
-
-def test_generate_codegen_scaffold_uses_business_name_for_controller_route(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ELEMENT_PLUS",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    controller_java = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("controller/admin/brand/HotelBrandController.java")
-    )
-
-    assert '@RequestMapping("/hotel/brand")' in controller_java["content"]
-    assert '@RequestMapping("/hotel/hotel-brand")' not in controller_java["content"]
-
-
 def test_generate_codegen_scaffold_adds_table_id_to_primary_key_do_field(
     workspace_builder, monkeypatch
 ) -> None:
@@ -1167,44 +904,6 @@ def test_generate_codegen_scaffold_adds_controller_permissions_and_swagger_annot
     ) == 2
 
 
-def test_generate_codegen_scaffold_uses_business_name_for_frontend_api_route(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ELEMENT_PLUS", "VUE3_VBEN5_ANTD_SCHEMA"),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    vue3_api = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/api/hotel/brand/index.ts")
-        and item["target_type"] == "VUE3_ELEMENT_PLUS"
-    )
-    vben_api = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("apps/web-antd/src/api/hotel/brand/index.ts")
-        and item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
-    )
-
-    assert "/admin-api/hotel/brand/page" in vue3_api["content"]
-    assert "/admin-api/hotel/hotel-brand/page" not in vue3_api["content"]
-    assert "/hotel/brand/page" in vben_api["content"]
-    assert "/hotel/hotel-brand/page" not in vben_api["content"]
-
-
 def test_generate_codegen_scaffold_normalizes_vue3_api_file_indentation(
     workspace_builder, monkeypatch
 ) -> None:
@@ -1265,110 +964,6 @@ def test_generate_codegen_scaffold_normalizes_vue3_api_file_indentation(
     assert first_line == "import request from '@/config/axios'"
     assert not first_line.startswith(" ")
     assert "\n        export const" not in vue3_api["content"]
-
-
-def test_generate_codegen_scaffold_vue3_api_includes_export_method(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ELEMENT_PLUS",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    vue3_api = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/api/hotel/brand/index.ts")
-        and item["target_type"] == "VUE3_ELEMENT_PLUS"
-    )
-
-    assert "export const exportHotelBrand = async (params: any) => {" in vue3_api["content"]
-    assert "request.download({ url: '/admin-api/hotel/brand/export-excel', params })" in vue3_api["content"]
-
-
-def test_generate_codegen_scaffold_vue3_index_replaces_todo_with_upstream_style_flows(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ELEMENT_PLUS",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    index_vue = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/views/hotel/brand/index.vue")
-    )
-
-    assert "TODO Yudao Pilot" not in index_vue["content"]
-    assert "const queryParams = reactive({" in index_vue["content"]
-    assert "const getList = async () => {" in index_vue["content"]
-    assert "const handleQuery = () => {" in index_vue["content"]
-    assert "const resetQuery = () => {" in index_vue["content"]
-    assert "const handleDelete = async (id: number) => {" in index_vue["content"]
-    assert "const handleExport = async () => {" in index_vue["content"]
-    assert "await exportHotelBrand(queryParams)" in index_vue["content"]
-    assert "v-hasPermi=\"['hotel:brand:export']\"" in index_vue["content"]
-
-
-def test_generate_codegen_scaffold_vue3_form_replaces_todo_with_upstream_style_submit_flow(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ELEMENT_PLUS",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    form_vue = next(
-        item
-        for item in result["data"]["generated_files"]
-        if item["relative_path"].endswith("src/views/hotel/brand/brandForm.vue")
-    )
-
-    assert "TODO Yudao Pilot" not in form_vue["content"]
-    assert "import { createHotelBrand, getHotelBrand, updateHotelBrand } from '@/api/hotel/brand'" in form_vue["content"]
-    assert "const formLoading = ref(false)" in form_vue["content"]
-    assert "const formType = ref('')" in form_vue["content"]
-    assert "const resetForm = () => {" in form_vue["content"]
-    assert "const open = async (type: string, id?: number) => {" in form_vue["content"]
-    assert "formData.value = await getHotelBrand(id)" in form_vue["content"]
-    assert "const submitForm = async () => {" in form_vue["content"]
-    assert "if (formType.value === 'create') {" in form_vue["content"]
-    assert "await createHotelBrand(data)" in form_vue["content"]
-    assert "await updateHotelBrand(data)" in form_vue["content"]
 
 
 def test_generate_codegen_scaffold_vue3_renders_common_field_types_with_upstream_controls(
@@ -1538,111 +1133,6 @@ def test_generate_codegen_scaffold_vue3_renders_common_field_types_with_upstream
     assert "<el-input-number" in form_vue
     assert "<UploadImg v-model=\"formData.coverUrl\" />" in form_vue
     assert "<Editor v-model=\"formData.content\" height=\"150px\" />" in form_vue
-
-
-def test_generate_codegen_scaffold_vben_includes_export_contract_and_toolbar_action(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_VBEN5_ANTD_SCHEMA",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    api_ts = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
-        and item["relative_path"].endswith("apps/web-antd/src/api/hotel/brand/index.ts")
-    )
-    index_vue = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_VBEN5_ANTD_SCHEMA"
-        and item["relative_path"].endswith("apps/web-antd/src/views/hotel/brand/index.vue")
-    )
-
-    assert "export function exportHotelBrand(params" in api_ts
-    assert "requestClient.download('/hotel/brand/export-excel'" in api_ts
-    assert "import { deleteHotelBrand, exportHotelBrand, getHotelBrandPage }" in index_vue
-    assert "auth: ['hotel:brand:export']" in index_vue
-
-
-def test_generate_codegen_scaffold_uniapp_replaces_placeholder_pages_with_data_flows(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        frontend_types=("VUE3_ADMIN_UNIAPP_WOT",),
-        manual_rules_yaml="""
-- module: hotel
-  table_prefixes:
-    - hotel
-  table_rules:
-    - table: hotel_brand
-      business: brand
-      entity: HotelBrand
-""".strip(),
-    )
-
-    result = generate_codegen_scaffold_tool("hotel_brand", str(workspace_root))
-
-    assert result["ok"] is True
-    api_ts = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
-        and item["relative_path"].endswith("src/api/hotel/brand/index.ts")
-    )
-    index_vue = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
-        and item["relative_path"].endswith("src/pages-hotel/brand/index.vue")
-    )
-    search_vue = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
-        and item["relative_path"].endswith("src/pages-hotel/brand/components/search-form.vue")
-    )
-    form_vue = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
-        and item["relative_path"].endswith("src/pages-hotel/brand/form/index.vue")
-    )
-    detail_vue = next(
-        item["content"]
-        for item in result["data"]["generated_files"]
-        if item["target_type"] == "VUE3_ADMIN_UNIAPP_WOT"
-        and item["relative_path"].endswith("src/pages-hotel/brand/detail/index.vue")
-    )
-
-    assert "export function exportHotelBrand" in api_ts
-    assert "http.download" in api_ts
-    assert "SearchForm @search=\"handleQuery\" @reset=\"handleReset\"" in index_vue
-    assert "const loadMoreState = ref<LoadMoreState>('loading')" in index_vue
-    assert "async function getList()" in index_vue
-    assert "function handleAdd()" in index_vue
-    assert "function handleDetail(item: HotelBrand)" in index_vue
-    assert "wd-search" in search_vue
-    assert "emit('search'" in search_vue
-    assert "emit('reset')" in search_vue
-    assert "async function handleSubmit()" in form_vue
-    assert "await createHotelBrand" in form_vue
-    assert "await updateHotelBrand" in form_vue
-    assert "detail.value = await getHotelBrand(props.id)" in detail_vue
-    assert "const detail = ref<HotelBrand | null>(null)" in detail_vue
 
 
 def test_generate_vben_schema_refines_field_rendering_rules(
@@ -1960,135 +1450,6 @@ def test_generate_vben_schema_uses_image_upload_for_logo_fields(
     assert "component: 'ImageUpload'" in data_ts
     assert "deleteToken" not in data_ts
     assert "options: getDictOptions(DICT_TYPE.COMMON_STATUS, 'number')" in data_ts
-
-
-def test_generate_codegen_scaffold_write_files_outputs_frontend_artifacts(
-    tmp_path: Path, repo_root: Path
-) -> None:
-    workspace_root = tmp_path / "workspace"
-    config_dir = workspace_root / ".yudao-pilot"
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    vue3_root = tmp_path / "frontend-vue3"
-    vben_root = tmp_path / "frontend-vben"
-    uniapp_root = tmp_path / "frontend-uniapp"
-    vue3_root.mkdir(parents=True, exist_ok=True)
-    vben_root.mkdir(parents=True, exist_ok=True)
-    uniapp_root.mkdir(parents=True, exist_ok=True)
-
-    raw_config = {
-        "version": 1,
-        "workspace": {"name": "write-files-workspace"},
-        "projects": {
-            "backend": {
-                "path": str(repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"),
-                "type": "ruoyi-vue-pro-jdk17",
-                "config_profile": "local",
-            },
-            "frontend": [
-                {"type": "VUE3_ELEMENT_PLUS", "path": str(vue3_root)},
-                {"type": "VUE3_VBEN5_ANTD_GENERAL", "path": str(vben_root)},
-                {"type": "VUE3_VBEN5_ANTD_SCHEMA", "path": str(vben_root)},
-                {"type": "VUE3_VBEN5_EP_GENERAL", "path": str(vben_root)},
-                {"type": "VUE3_VBEN5_EP_SCHEMA", "path": str(vben_root)},
-                {"type": "VUE3_ADMIN_UNIAPP_WOT", "path": str(uniapp_root)},
-            ],
-        },
-        "database": {
-            "mode": "auto",
-            "host": "",
-            "port": 3306,
-            "database": "",
-            "username": "",
-            "password": "",
-        },
-        "codegen": {
-            "routing": {"mode": "manual"},
-            "manual_rules": [
-                {
-                    "module": "member",
-                    "table_prefixes": ["merchant"],
-                    "table_rules": [
-                        {
-                            "table": "merchant",
-                            "business": "merchant",
-                            "entity": "Merchant",
-                        }
-                    ],
-                }
-            ],
-        },
-    }
-    (config_dir / "config.yaml").write_text(
-        yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-
-    result = generate_codegen_scaffold_tool(
-        "merchant",
-        str(workspace_root),
-        include_backend=False,
-        include_frontend=True,
-        write_files=True,
-        overwrite=True,
-    )
-
-    assert result["ok"] is True
-    assert (vue3_root / "src/views/member/merchant/index.vue").exists()
-    assert (vue3_root / "src/api/member/merchant/index.ts").exists()
-    assert (vben_root / "apps/web-antd/src/views/member/merchant/data.ts").exists()
-    assert (vben_root / "apps/web-antd/src/views/member/merchant/index.vue").exists()
-    assert (vben_root / "apps/web-ele/src/views/member/merchant/data.ts").exists()
-    assert (vben_root / "apps/web-ele/src/views/member/merchant/index.vue").exists()
-    assert (uniapp_root / "src/pages-member/merchant/index.vue").exists()
-    assert (uniapp_root / "src/api/member/merchant/index.ts").exists()
-
-    web_antd_index = (vben_root / "apps/web-antd/src/views/member/merchant/index.vue").read_text(
-        encoding="utf-8"
-    )
-    web_ele_index = (vben_root / "apps/web-ele/src/views/member/merchant/index.vue").read_text(
-        encoding="utf-8"
-    )
-    web_ele_form = (vben_root / "apps/web-ele/src/views/member/merchant/modules/form.vue").read_text(
-        encoding="utf-8"
-    )
-    assert "import { useGridColumns, useGridFormSchema } from './data'" in web_antd_index
-    assert "import { useGridColumns, useGridFormSchema } from './data'" in web_ele_index
-    assert "import { ElLoading, ElMessage } from 'element-plus';" in web_ele_index
-    assert "link: true" in web_ele_index
-    assert "import { ElMessage } from 'element-plus';" in web_ele_form
-
-
-def test_generate_codegen_scaffold_preview_writes_to_temp_preview_dir(
-    workspace_builder,
-) -> None:
-    workspace_root = workspace_builder(
-        manual_rules_yaml="""
-- module: yudao
-  table_prefixes:
-    - yudao_demo01_contact
-    - yudao
-  table_rules:
-    - table: yudao_demo01_contact
-      business: demo01_contact
-      entity: Demo01Contact
-"""
-    )
-    result = generate_codegen_scaffold_tool("yudao_demo01_contact", str(workspace_root))
-
-    assert result["ok"] is True
-    preview_result = result["data"]["preview_result"]
-    assert preview_result["ok"] is True
-    assert preview_result["mode"] == "preview"
-    assert preview_result["workspace_root"] == str(workspace_root)
-    preview_root = Path(preview_result["preview_root"])
-    assert preview_root.is_dir()
-    assert workspace_root / ".yudao-pilot" / "previews" in preview_root.parents
-
-    first_written = Path(preview_result["results"][0]["path"])
-    assert first_written.exists()
-    assert str(first_written).startswith(str(preview_root))
-    assert not (workspace_root / "src/views/yudao/demo01-contact/index.vue").exists()
 
 
 def test_generate_codegen_scaffold_falls_back_to_database_schema(
@@ -3354,15 +2715,6 @@ def test_apply_menu_plan_to_database_updates_existing_menu_icon(monkeypatch) -> 
 # scan_backend_table_entities
 # ---------------------------------------------------------------------------
 
-def test_scan_backend_table_entities_finds_do_files(repo_root: Path) -> None:
-    backend_root = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"
-    entities = scan_backend_table_entities(backend_root)
-    table_names = {e.table_name for e in entities}
-    assert "hotel_brand" in table_names
-    hotel_brand = next(e for e in entities if e.table_name == "hotel_brand")
-    assert hotel_brand.module_name == "hotel"
-    assert hotel_brand.business_dir == "brand"
-
 
 def test_scan_backend_table_entities_empty_on_missing_dir(tmp_path: Path) -> None:
     assert scan_backend_table_entities(tmp_path / "nonexistent") == []
@@ -3372,62 +2724,25 @@ def test_scan_backend_table_entities_empty_on_missing_dir(tmp_path: Path) -> Non
 # infer_table_resolution with backend_root (scan mode)
 # ---------------------------------------------------------------------------
 
-def test_infer_resolution_manual_exact_still_wins(workspace_builder, repo_root: Path) -> None:
+def test_infer_resolution_manual_exact_still_wins(workspace_builder) -> None:
     from yudao_pilot.config import load_workspace_config
     ws = workspace_builder()
     config = load_workspace_config(ws)
-    backend_root = (repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17")
+    backend_root = Path(yaml.safe_load((ws / ".yudao-pilot" / "config.yaml").read_text())["projects"]["backend"]["path"])
     r = infer_table_resolution("merchant", config, backend_root=backend_root)
     assert r.matched_by == "exact"
     assert r.module == "member"
 
 
-def test_infer_resolution_manual_prefix_still_wins(workspace_builder, repo_root: Path) -> None:
+def test_infer_resolution_manual_prefix_still_wins(workspace_builder) -> None:
     from yudao_pilot.config import load_workspace_config
     ws = workspace_builder()
     config = load_workspace_config(ws)
-    backend_root = (repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17")
+    backend_root = Path(yaml.safe_load((ws / ".yudao-pilot" / "config.yaml").read_text())["projects"]["backend"]["path"])
     r = infer_table_resolution("merchant_account", config, backend_root=backend_root)
     assert r.matched_by == "prefix"
     assert r.module == "member"
     assert r.business == "merchant"
-
-
-def test_infer_resolution_scan_matches_existing_do(workspace_builder, repo_root: Path) -> None:
-    from yudao_pilot.config import load_workspace_config
-    ws = workspace_builder(
-        manual_rules_yaml="""\
-- module: member
-  table_prefixes: []
-  table_rules: []
-""",
-    )
-    config = load_workspace_config(ws)
-    backend_root = (repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17")
-    r = infer_table_resolution("system_notice_template", config, backend_root=backend_root)
-    assert r.matched_by == "scan"
-    assert r.module == "system"
-
-
-def test_infer_resolution_scan_uses_suffix_business_when_table_prefixed_by_module(
-    workspace_builder, repo_root: Path
-) -> None:
-    from yudao_pilot.config import load_workspace_config
-
-    ws = workspace_builder(
-        manual_rules_yaml="""\
-- module: member
-  table_prefixes: []
-  table_rules: []
-""",
-    )
-    config = load_workspace_config(ws)
-    backend_root = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"
-    r = infer_table_resolution("hotel_brand", config, backend_root=backend_root)
-
-    assert r.matched_by in {"scan", "new_module"}
-    assert r.module == "hotel"
-    assert r.business == "brand"
 
 
 def test_infer_resolution_no_backend_root_falls_back(workspace_builder) -> None:

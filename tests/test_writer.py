@@ -7,8 +7,9 @@ from yudao_pilot.models import GeneratedFile
 from yudao_pilot.writer import resolve_target_base_dir, write_generated_files
 
 
-def test_backend_target_base_dir_resolves_repo_root_when_configured_to_yudao_server(repo_root: Path) -> None:
-    backend_server_path = repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17" / "yudao-server"
+def test_backend_target_base_dir_resolves_repo_root_when_configured_to_yudao_server(tmp_path: Path) -> None:
+    backend_server_path = tmp_path / "backend" / "yudao-server"
+    backend_server_path.mkdir(parents=True)
     config = WorkspaceConfig.model_validate(
         {
             "projects": {
@@ -22,17 +23,17 @@ def test_backend_target_base_dir_resolves_repo_root_when_configured_to_yudao_ser
         }
     )
 
-    resolved = resolve_target_base_dir(repo_root, config, "backend", "ruoyi-vue-pro-jdk17")
+    resolved = resolve_target_base_dir(tmp_path, config, "backend", "ruoyi-vue-pro-jdk17")
 
     assert resolved == backend_server_path.parent
 
 
-def test_backend_writer_skips_when_module_does_not_exist(repo_root: Path, tmp_path: Path) -> None:
+def test_backend_writer_skips_when_module_does_not_exist(tmp_path: Path) -> None:
     config = WorkspaceConfig.model_validate(
         {
             "projects": {
                 "backend": {
-                    "path": str(repo_root / "yudao-projects" / "ruoyi-vue-pro-jdk17"),
+                    "path": str(tmp_path / "backend"),
                     "type": "ruoyi-vue-pro-jdk17",
                 },
                 "frontend": [],

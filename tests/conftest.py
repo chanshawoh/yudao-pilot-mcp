@@ -31,10 +31,10 @@ def repo_root() -> Path:
 
 
 @pytest.fixture
-def workspace_builder(tmp_path: Path, repo_root: Path):
+def workspace_builder(tmp_path: Path):
     def _build(
         *,
-        backend_path: str = "yudao-projects/ruoyi-vue-pro-jdk17",
+        backend_path: str = "backend",
         backend_type: str = "ruoyi-vue-pro-jdk17",
         frontend_types: tuple[str, ...] = ("VUE3_ELEMENT_PLUS",),
         manual_rules_yaml: str | None = None,
@@ -42,11 +42,68 @@ def workspace_builder(tmp_path: Path, repo_root: Path):
         workspace_root = tmp_path / "workspace"
         (workspace_root / ".yudao-pilot").mkdir(parents=True, exist_ok=True)
 
+        backend_root = workspace_root / backend_path
+        (backend_root / "yudao-server").mkdir(parents=True, exist_ok=True)
+        (backend_root / "yudao-module-member").mkdir(parents=True, exist_ok=True)
+        (backend_root / "sql" / "mysql" / "migrations").mkdir(parents=True, exist_ok=True)
+        (backend_root / "pom.xml").write_text(
+            dedent(
+                """\
+                <project>
+                  <groupId>cn.iocoder.boot</groupId>
+                  <artifactId>yudao</artifactId>
+                  <packaging>pom</packaging>
+                  <properties><java.version>17</java.version><spring.boot.version>3.2.0</spring.boot.version></properties>
+                  <modules><module>yudao-server</module><module>yudao-module-member</module></modules>
+                </project>
+                """
+            ),
+            encoding="utf-8",
+        )
+        (backend_root / "yudao-server" / "pom.xml").write_text(
+            "<project><artifactId>yudao-server</artifactId><dependencies><dependency><groupId>cn.iocoder.boot</groupId><artifactId>yudao-module-member</artifactId></dependency></dependencies></project>",
+            encoding="utf-8",
+        )
+        resources_root = backend_root / "yudao-server" / "src" / "main" / "resources"
+        resources_root.mkdir(parents=True, exist_ok=True)
+        (resources_root / "application-local.yaml").write_text(
+            dedent(
+                """\
+                spring:
+                  datasource:
+                    url: jdbc:mysql://127.0.0.1:3306/demo?useSSL=false
+                    username: root
+                    password: 123456
+                yudao:
+                  codegen:
+                    base-package: cn.iocoder.yudao
+                    unit-test-enable: false
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        frontend_roots: dict[str, Path] = {}
+        for frontend_type in frontend_types:
+            frontend_root = workspace_root / "frontend" / FRONTEND_PATHS[frontend_type]
+            frontend_root.mkdir(parents=True, exist_ok=True)
+            frontend_roots[frontend_type] = frontend_root
+            package_json = '{"dependencies":{"vue":"^3.4.0","element-plus":"^2.0.0"}}'
+            if "VBEN5" in frontend_type:
+                package_json = '{"scripts":{"dev":"turbo run dev"},"dependencies":{"@vben/common-ui":"workspace:*"}}'
+            elif "UNIAPP" in frontend_type:
+                package_json = '{"dependencies":{"vue":"^3.4.0","@dcloudio/uni-app":"^3.0.0"}}'
+            (frontend_root / "package.json").write_text(package_json, encoding="utf-8")
+            (frontend_root / "src" / "utils").mkdir(parents=True, exist_ok=True)
+            (frontend_root / "src" / "utils" / "dict.ts").write_text(
+                "export enum DICT_TYPE {\n}\n", encoding="utf-8"
+            )
+
         frontend_yaml = "\n".join(
             dedent(
                 f"""\
                 - type: {frontend_type}
-                  path: {repo_root / "yudao-projects" / FRONTEND_PATHS[frontend_type]}
+                  path: {frontend_roots[frontend_type]}
                 """
             ).rstrip()
             for frontend_type in frontend_types
@@ -76,7 +133,7 @@ def workspace_builder(tmp_path: Path, repo_root: Path):
             "workspace": {"name": "pytest-workspace"},
             "projects": {
                 "backend": {
-                    "path": str(repo_root / backend_path),
+                    "path": str(backend_root),
                     "type": backend_type,
                     "config_profile": "local",
                 },
