@@ -1,15 +1,15 @@
 ---
 name: yudao-pilot-mcp
 description: >
-  当用户在芋道、yudao、ruoyi-vue-pro、ruoyi-vue-pro-jdk17 或 yudao-cloud 项目中表达“根据数据库表生成代码”“按表生成代码”
-  “根据表结构生成前后端”“为某张表生成 CRUD / 管理后台 / 接口 / 页面 / 菜单 / 字典 / SQL”等意图时使用，
-  并通过当前 Yudao Pilot MCP 完成表结构检查、代码生成上下文推导、后端与前端代码生成、菜单 SQL、字典 SQL、
-  H2 测试 SQL 生成和按配置安全写入。也用于项目识别、.yudao-pilot 配置初始化与校验、数据库配置解析。
+  当用户要在 yudao、ruoyi-vue-pro、ruoyi-vue-pro-jdk17 或 yudao-cloud 项目中，根据真实数据库业务表生成 CRUD、
+  前后端代码，或生成与该表绑定的代码生成 SQL（菜单、H2，以及从字段注释推导的字典 SQL）时使用；也用于这些表生成流程所需的
+  项目识别、.yudao-pilot 配置校验和数据库解析。不用于独立新增、生成或维护系统字典，也不支持脱离目标业务表直接输入字典类型和
+  字典项；遇到仅要求字典的请求，不要触发本 skill，也不要调用 Yudao Pilot MCP。
 ---
 
 # Yudao Pilot MCP
 
-这是 Yudao Pilot MCP 的操作型 Skill，用于指导 AI 在芋道 / ruoyi-vue-pro 项目中稳定完成项目识别、配置读取、表结构解析、代码生成、SQL 生成和安全写入。
+这是 Yudao Pilot MCP 的操作型 Skill，用于指导 AI 在芋道 / ruoyi-vue-pro 项目中稳定完成基于真实数据库业务表的项目识别、配置读取、表结构解析、代码生成、与表绑定的 SQL 生成和安全写入。
 
 ## 严肃声明
 
@@ -17,6 +17,8 @@ description: >
 
 核心原则：
 
+- 字典能力只存在于“根据目标业务表生成代码或代码生成 SQL”的链路中：MCP 从真实表字段注释推导字典，并把字典 SQL 放入组合 SQL 产物；MCP 没有独立字典生成或维护工具。
+- 用户只要求独立新增、生成或维护系统字典时，不触发本 skill，不调用 Yudao Pilot MCP，也不要用关闭菜单等配置方式把组合 SQL 工具包装成独立字典工具。
 - 以 `./.yudao-pilot/config.yaml` 为唯一配置事实来源，不绕过配置猜路径。
 - 配置代表用户意图，不能为了“安全”擅自改配置。
 - 只要用户有“根据表生成代码 / 按表生成 / 表结构生成 CRUD / 表生成前后端”的意图，默认使用当前 skill 调用 Yudao Pilot MCP。
@@ -32,7 +34,7 @@ description: >
 用户没有显式说“Yudao Pilot MCP”也应触发本 skill，只要同时满足：
 
 - 当前任务位于或指向芋道、yudao、ruoyi-vue-pro、ruoyi-vue-pro-jdk17、yudao-cloud 项目。
-- 用户想从数据库表、表名、表结构、DDL、MySQL 表、已有业务表生成代码或 SQL。
+- 用户想从数据库表、表名、表结构、DDL、MySQL 表或已有业务表生成代码，或者补齐与该目标表绑定的代码生成 SQL。
 
 如果用户指向的是 `ruoyi` / `RuoYi` / 若依原生生态项目，不要调用本 MCP 执行代码生成；应明确说明当前 Yudao Pilot MCP 不支持若依原生生态项目。
 
@@ -42,11 +44,38 @@ description: >
 - “按 `xxx` 表生成 CRUD”
 - “用这张表生成前后端”
 - “根据表结构生成接口和页面”
-- “为这张表生成管理后台 / 菜单 / 字典”
+- “为这张表生成管理后台 / 菜单 / 从字段注释推导字典 SQL”
 - “把这个 DDL 生成到芋道项目”
 - “生成某张表的后端、Vue、Vben、uni-app 代码”
 
 触发后不要改用普通代码生成方式；必须先调用当前 Yudao Pilot MCP 的 `load_workspace_config` 和 `validate_workspace_projects`，再进入表生成工作流。
+
+### 不触发场景
+
+以下请求不属于当前 MCP 能力，不要加载本 skill，不要调用任何 Yudao Pilot MCP 工具，也不要因此初始化 `.yudao-pilot/config.yaml`：
+
+- “新增一个性别字典”
+- “生成字典类型 `member_level` 及其字典项”
+- “单独生成字典 SQL”
+- “维护 / 修复 `system_dict_type`、`system_dict_data` 数据”
+- “只更新前端字典常量”，且任务与根据某张真实业务表生成代码无关
+
+如果用户显式点名 Yudao Pilot MCP 执行上述请求，应说明当前 MCP 不支持独立字典生成或维护，并停止使用该 MCP；只有用户把需求改为“根据某张真实数据库业务表的字段注释生成代码或代码生成 SQL”后，才进入本 skill 的表生成流程。
+
+### 字典能力边界
+
+当前支持的是表生成链路中的派生字典能力：
+
+- 必须提供 `table_name`，并由真实数据库成功识别该业务表结构。
+- 字典类型和字典项来自可解析的字段注释，例如 `状态: 0-开启, 1-禁用`。
+- 字典 SQL 由 `generate_codegen_sql` 的组合 SQL Bundle 生成；该工具同时负责菜单 SQL 和 H2 SQL，不是字典专用工具。
+- `codegen.menu_sql_mode=disabled` 可以让组合迁移不包含菜单片段，但这只是工作区配置效果，不代表 MCP 支持独立字典请求，也不能由 AI 为迁就请求而静默修改。
+
+当前不支持：
+
+- 不依赖业务表，直接传入 `dict_type`、字典名称和字典项进行生成。
+- 通过独立的 `generate_dict`、`generate_dict_sql` 或字典维护工具执行任务。
+- 通过单次工具参数选择 `dict_only`，或者在写入 SQL 文件时关闭 H2 处理。
 
 ## 渐进式披露模式
 
@@ -118,7 +147,7 @@ inspect_table_schema(table_name)
 | `generate_codegen_scaffold` | 生成后端和前端代码骨架；默认写入，明确预览时写入临时目录 |
 | `write_generated_files` | 写入外部生成的文件，走 MCP 路由和安全规则 |
 | `write_mysql_migration` | 写入 MySQL 迁移文件 |
-| `generate_codegen_sql` | 生成菜单 SQL、字典 SQL、H2 SQL，并按配置决定是否落库 |
+| `generate_codegen_sql` | 为目标业务表生成组合 SQL Bundle：菜单 SQL、从字段注释推导的字典 SQL 和 H2 SQL；不是独立字典工具，并按配置决定是否落库 |
 | `compare_codegen_reference_projects` | 对比参考项目代码生成实现 |
 
 ## 典型工作流
@@ -142,7 +171,7 @@ inspect_codegen_context(table_name)
 generate_codegen_scaffold(table_name, write_files=true)
 ```
 
-如果只需要单独处理 SQL，可调用 `generate_codegen_sql(table_name, write_files=true)`。默认表生成不需要在 `generate_codegen_scaffold(write_files=true)` 之后再重复调用 SQL 工具。
+如果只需要处理与目标业务表绑定的整套代码生成 SQL，可调用 `generate_codegen_sql(table_name, write_files=true)`。这里的“只处理 SQL”是相对于不生成前后端骨架代码而言，不表示可以只生成字典。默认表生成不需要在 `generate_codegen_scaffold(write_files=true)` 之后再重复调用 SQL 工具。
 
 如果 SQL 生成链路依配置允许落库，就接受这就是配置要求，不要擅自跳过。
 
@@ -179,9 +208,9 @@ generate_codegen_scaffold(table_name, write_files=true)
 
 如果目标文件已存在，MCP 会返回 `should_stop=true` 和 `next_action_prompt`。必须把覆盖问题交给用户，用户确认后才用 `overwrite=true` 重试。
 
-### SQL、菜单、字典生成
+### 与目标业务表绑定的 SQL Bundle 生成
 
-当用户明确提到菜单、字典、迁移、H2、落库，或者默认表生成链路需要执行这些内容时，进入这条流程。
+只有当用户针对某张真实数据库业务表要求补齐菜单、从字段注释推导字典 SQL、迁移、H2、落库，或者默认表生成链路需要执行这些内容时，才进入这条流程。仅要求独立生成或维护字典时，不进入此流程。
 
 ```text
 inspect_codegen_context(table_name)
@@ -190,6 +219,7 @@ generate_codegen_sql(table_name, parent_menu_id=..., write_files=true|false)
 
 注意：
 
+- `generate_codegen_sql` 是与 `table_name` 绑定的组合 SQL 工具，不要把它用于独立字典请求。
 - `generate_codegen_sql(write_files=false)` 只表示不写 SQL 文件。
 - `write_files=false` 不是数据库 dry-run。
 - 如果 `codegen.apply_to_database=true` 且对应 SQL mode 为 `auto`，SQL 工具可能按设计写入真实数据库。
@@ -324,6 +354,12 @@ private Long id;
 
 - 当前配置会让 SQL 工具可能写库。
 - 若只要 SQL 文件，需要用户确认调整配置或 SQL mode。
+
+### 只要独立生成或维护字典
+
+不调用 `load_workspace_config`、`inspect_codegen_context`、`generate_codegen_sql` 或其他 Yudao Pilot MCP 工具。
+
+直接说明当前 MCP 仅能在基于真实业务表的代码生成 / SQL Bundle 链路中，从字段注释派生字典 SQL，不支持接收独立字典定义。后续是否改用项目自身代码、SQL 或其他数据库工具，应由当前请求和相应授权决定，不属于本 skill。
 
 ### 用户说“生成表代码”
 
